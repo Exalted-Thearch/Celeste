@@ -50,7 +50,7 @@ module.exports = {
 
     try {
       // Try Spotify first — clean "Title — Artist" format
-        const spotifyTracks = await withTimeout(
+      const spotifyTracks = await withTimeout(
         searchSpotify(query, 5),
         SPOTIFY_SEARCH_TIMEOUT_MS,
       );
@@ -257,7 +257,8 @@ module.exports = {
         if (tracks.length > 100) tracks = tracks.slice(0, 100);
       }
       if (!isPlaylist && tracks.length > 1 && (!isUrl || forceSingleTrack)) {
-        tracks = [tracks[0]];
+        const bestTrack = pickBestCandidateTrack(tracks, sourceMeta);
+        tracks = [bestTrack || tracks[0]];
       }
 
       // Inject Spotify metadata into the track object so ui.js can use it
@@ -323,6 +324,91 @@ function msToTimestamp(ms) {
 function shouldUseAudioDuration(value) {
   if (!value) return true;
   return value === "0:30" || value === "0:29" || value === "0:31";
+}
+
+function pickBestCandidateTrack(tracks, sourceMeta) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+  if (!sourceMeta?.title) return tracks[0];
+
+  const expectedDuration = parseTimestampToSeconds(sourceMeta.duration);
+  const targetTokens = buildTokenSet(
+    `${sourceMeta.title} ${sourceMeta.author || ""}`,
+  );
+
+  const scored = tracks.map((track) => {
+    const title = `${track.title || ""}`;
+    const author = `${track.author || ""}`;
+    const haystack = `${title} ${author}`.toLowerCase();
+    const candidateTokens = buildTokenSet(`${title} ${author}`);
+    const overlap = jaccard(targetTokens, candidateTokens);
+
+    const trackDuration = parseTimestampToSeconds(track.duration);
+    const durationPenalty =
+      expectedDuration && trackDuration ?
+        Math.min(Math.abs(trackDuration - expectedDuration), 180)
+      : 0;
+
+    let score = overlap * 100;
+    score -= durationPenalty * 0.2;
+
+    if (
+      /\b(lyrics?|lyrical|slowed|reverb|sped\s*up|8d|nightcore|remix|dj|cover)\b/i.test(
+        haystack,
+      )
+    ) {
+      score -= 20;
+    }
+
+    if (/\b(official\s+audio|topic)\b/i.test(haystack)) {
+      score += 8;
+    }
+
+    if (/\b(live|performance|concert)\b/i.test(haystack)) {
+      score -= 8;
+    }
+
+    return { track, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.track || tracks[0];
+}
+
+function buildTokenSet(value = "") {
+  const cleaned = value
+    .toLowerCase()
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return new Set(cleaned.split(" ").filter(Boolean));
+}
+
+function jaccard(a, b) {
+  if (!a?.size || !b?.size) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+  const union = a.size + b.size - intersection;
+  if (!union) return 0;
+  return intersection / union;
+}
+
+function parseTimestampToSeconds(value) {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(":").map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) return null;
+
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+
+  return null;
 }
 
 async function resolveAppleMusicMetadata(value) {

@@ -34,7 +34,7 @@ const player = new Player(client, {
   // YouTubei must be registered first
   await player.extractors.register(YoutubeiExtractor, {
     streamOptions: {
-      useClient: "ANDROID",
+      useClient: "WEB",
     },
     useYoutubeDL: true,
   });
@@ -206,7 +206,7 @@ player.events.on("emptyQueue", async (queue) => {
         },
       ]
     : []),
-  {
+    {
       query: `${seedTitle} ${seedAuthor}`,
       isUrl: false,
       label: "search-seed",
