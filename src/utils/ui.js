@@ -18,6 +18,8 @@ const config = require("../../config");
 const ICONS = {
   spotify: "<:spotify:1483160867838365706>",
   youtube: "<:ytMusic:1483161271711957114>",
+  appleMusic: "<:AppleMusic:1483456769014501406>",
+  soundcloud: "<:soundcloud:1483457082022690846>",
 };
 
 /**
@@ -42,18 +44,36 @@ function createTrackMessage(track, state = "Playing", queue = null) {
   const isQueued  = state === "Added to Queue";
   const isPlaying = state === "Playing" || isPaused;
 
-  // Resolve Spotify metadata injected by play.js, fallback to track fields
   const sp        = track.spotifyInfo ?? track.metadata?.spotifyInfo ?? null;
   const isSpotify = !!sp;
+  
+  const extId = track.extractor?.identifier || "";
+  const isApple = extId.includes("apple-music");
+  const isSoundCloud = extId.includes("soundcloud");
+
   const title     = sp?.title     || track.title     || "Unknown Title";
   const author    = sp?.author    || track.author    || "Unknown Artist";
   const url       = sp?.url       || track.url       || null;
   const thumbnail = sp?.thumbnail || track.thumbnail || null;
   const duration  = sp?.duration  || track.duration  || null;
 
-  const accentColor = isSpotify ? 0x1DB954 : 0x5865F2;
-  const sourceIcon  = isSpotify ? ICONS.spotify : ICONS.youtube;
-  const sourceName  = isSpotify ? "Spotify" : "YouTube";
+  let accentColor = 0x5865F2; // Default YouTube/Discord Blue
+  let sourceIcon  = ICONS.youtube;
+  let sourceName  = "YouTube";
+
+  if (isSpotify) {
+    accentColor = 0x1DB954;
+    sourceIcon  = ICONS.spotify;
+    sourceName  = "Spotify";
+  } else if (isApple) {
+    accentColor = 0xFA243C;
+    sourceIcon  = ICONS.appleMusic;
+    sourceName  = "Apple Music";
+  } else if (isSoundCloud) {
+    accentColor = 0xFF3300;
+    sourceIcon  = ICONS.soundcloud;
+    sourceName  = "SoundCloud";
+  }
 
   // ── State label (top of card) ─────────────────────────────────────────────────
   // "▸ Now Playing" / "▸ Paused" / "🎵 Added to Queue  `#2`"

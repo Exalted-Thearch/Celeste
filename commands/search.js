@@ -4,7 +4,7 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
 } = require('discord.js');
-const { useMainPlayer } = require('discord-player');
+const { useMainPlayer, useQueue } = require('discord-player');
 const config = require('../config');
 
 module.exports = {
@@ -22,7 +22,6 @@ module.exports = {
         .addChoices(
           { name: 'YouTube',    value: 'YOUTUBE_SEARCH' },
           { name: 'Spotify',    value: 'SPOTIFY_SEARCH' },
-          { name: 'SoundCloud', value: 'SOUNDCLOUD_SEARCH' },
         ),
     ),
 
@@ -51,6 +50,16 @@ module.exports = {
         if (spotifyTracks.length > 0) {
           const spotifyUrl = spotifyTracks[0].external_urls.spotify;
           results = await player.search(spotifyUrl, { requestedBy: interaction.user });
+          
+          // Store Spotify metadata for the top 5 results to re-attach later
+          interaction.client.searchMetadata = spotifyTracks.slice(0, 5).map(t => ({
+            title: t.name,
+            author: t.artists.map(a => a.name).join(', '),
+            thumbnail: t.album?.images?.[0]?.url ?? null,
+            url: t.external_urls.spotify,
+            duration: msToTimestamp(t.duration_ms)
+          }));
+
           console.log('[Spotify Search Command] Found via API →', spotifyUrl);
         }
       } else {
@@ -105,6 +114,12 @@ module.exports = {
         await i.deferUpdate();
         const selected = tracks[parseInt(i.values[0])];
 
+        // If Spotify, inject the metadata we cached earlier during search
+        if (platform === 'SPOTIFY_SEARCH' && interaction.client.searchMetadata) {
+          const meta = interaction.client.searchMetadata[parseInt(i.values[0])];
+          if (meta) selected.spotifyInfo = meta;
+        }
+
         const { track } = await player.play(channel, selected, {
           nodeOptions: {
             metadata:             { channel: interaction.channel },
@@ -139,3 +154,10 @@ module.exports = {
     }
   },
 };
+
+function msToTimestamp(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}

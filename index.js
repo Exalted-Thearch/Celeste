@@ -5,7 +5,7 @@ const {
   Collection,
   EmbedBuilder,
 } = require("discord.js");
-const { Player } = require("discord-player");
+const { Player, QueueRepeatMode, QueryType } = require("discord-player");
 const { YoutubeiExtractor } = require("discord-player-youtubei");
 const fs = require("fs");
 const path = require("path");
@@ -34,65 +34,226 @@ const player = new Player(client, {
   // YouTubei must be registered first
   await player.extractors.register(YoutubeiExtractor, {
     streamOptions: {
-      useClient: 'ANDROID',
+      useClient: "ANDROID",
     },
     useYoutubeDL: true,
   });
 
   // Load specialized extractors
   try {
-    const { SpotifyExtractor, SoundCloudExtractor } = require('@discord-player/extractor');
+    const {
+      SpotifyExtractor,
+      SoundCloudExtractor,
+    } = require("@discord-player/extractor");
 
-    console.log('Spotify ID:', config.spotifyClientId ? '✅ present' : '❌ MISSING');
-    console.log('Spotify Secret:', config.spotifyClientSecret ? '✅ present' : '❌ MISSING');
+    console.log(
+      "Spotify ID:",
+      config.spotifyClientId ? "✅ present" : "❌ MISSING",
+    );
+    console.log(
+      "Spotify Secret:",
+      config.spotifyClientSecret ? "✅ present" : "❌ MISSING",
+    );
 
     await player.extractors.register(SpotifyExtractor, {
       clientId: config.spotifyClientId,
       clientSecret: config.spotifyClientSecret,
     });
-    console.log('✅ SpotifyExtractor registered');
+    console.log("✅ SpotifyExtractor registered");
 
     await player.extractors.register(SoundCloudExtractor, {});
-    console.log('✅ SoundCloudExtractor registered');
+    console.log("✅ SoundCloudExtractor registered");
   } catch (err) {
-    console.error('❌ Failed to register Spotify/SoundCloud extractor:', err.message);
+    console.error(
+      "❌ Failed to register Spotify/SoundCloud extractor:",
+      err.message,
+    );
   }
 
   // Load remaining extractors (skip already registered ones)
   try {
-    const { DefaultExtractors } = await import('@discord-player/extractor');
+    const { DefaultExtractors } = await import("@discord-player/extractor");
     for (const extractor of DefaultExtractors) {
       if (!player.extractors.store.has(extractor.identifier)) {
         await player.extractors.register(extractor, {});
       }
     }
-    console.log('✅ DefaultExtractors loaded');
+    console.log("✅ DefaultExtractors loaded");
   } catch (err) {
-    console.error('❌ Failed to load DefaultExtractors:', err.message);
+    console.error("❌ Failed to load DefaultExtractors:", err.message);
   }
 
-  console.log('Registered extractors:', [...player.extractors.store.keys()]);
+  console.log("Registered extractors:", [...player.extractors.store.keys()]);
 })();
 
 const { createTrackMessage } = require("./src/utils/ui");
 
 // ─── Player Events ────────────────────────────────────────────────────────────
 player.events.on("playerStart", (queue, track) => {
-  console.log(`[Player] Started playing: ${track.title} in ${queue.guild.name}`);
+  console.log(
+    `[Player] Started playing: ${track.title} in ${queue.guild.name}`,
+  );
+  if (queue.metadata) queue.metadata.lastTrack = track;
   const ui = createTrackMessage(track);
   queue.metadata?.channel?.send({ ...ui });
 });
 
-player.events.on("emptyQueue", (queue) => {
-  console.log(`[Player] Queue finished in ${queue.guild.name}. RepeatMode: ${queue.repeatMode}`);
-  
-  // If autoplay is off, notify. If on, discord-player should be bridging.
-  if (queue.repeatMode !== 3) { // 3 is AUTOPLAY
+player.events.on("emptyQueue", async (queue) => {
+  console.log(
+    `[Player] Queue finished in ${queue.guild.name}. RepeatMode: ${queue.repeatMode}`,
+  );
+
+  // If autoplay is off, notify. If on, attempt a manual fallback recommendation.
+  if (queue.repeatMode !== QueueRepeatMode.AUTOPLAY) {
     queue.metadata?.channel?.send(
       "✅ Queue finished! Add more songs with `/play`.",
     );
-  } else {
-    console.log("[Player] Autoplay is enabled, waiting for bridge...");
+    return;
+  }
+
+  console.log(
+    "[Player] Autoplay is enabled, attempting fallback recommendation...",
+  );
+
+  const seedTrack =
+    queue.history?.currentTrack ||
+    queue.metadata?.lastTrack ||
+    queue.history?.tracks?.toArray?.()?.at?.(-1);
+
+  if (!seedTrack) {
+    console.log("[Player] Autoplay fallback skipped: no seed track available.");
+    return;
+  }
+
+  const recentPlayed = queue.history?.tracks?.toArray?.()?.slice(-15) || [];
+
+  const normalizeTitle = (title = "") =>
+    title
+      .toLowerCase()
+      .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
+      .replace(
+        /\b(official|video|audio|lyrics?|topic|hq|hd|remaster(?:ed)?|version|sped\s*up|slowed|reverb)\b/g,
+        " ",
+      )
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const tokenize = (title = "") => {
+    const clean = normalizeTitle(title);
+    return new Set(clean.split(" ").filter(Boolean));
+  };
+
+  const tokenOverlap = (aTitle, bTitle) => {
+    const a = tokenize(aTitle);
+    const b = tokenize(bTitle);
+    if (!a.size || !b.size) return 0;
+
+    let common = 0;
+    for (const token of a) {
+      if (b.has(token)) common += 1;
+    }
+
+    return common / Math.min(a.size, b.size);
+  };
+
+  const extractYouTubeVideoId = (url = "") => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes("youtu.be")) {
+        return parsed.pathname.slice(1);
+      }
+      if (parsed.hostname.includes("youtube.com")) {
+        return parsed.searchParams.get("v");
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
+  const isNearDuplicate = (candidate) => {
+    if (!candidate || candidate.url === seedTrack.url) return true;
+
+    const sameTitle =
+      normalizeTitle(candidate.title) === normalizeTitle(seedTrack.title);
+    const heavyTitleOverlap =
+      tokenOverlap(candidate.title, seedTrack.title) >= 0.8;
+
+    const seedDuration = Number(seedTrack.durationMS || 0);
+    const candidateDuration = Number(candidate.durationMS || 0);
+    const closeDuration =
+      seedDuration > 0 &&
+      candidateDuration > 0 &&
+      Math.abs(seedDuration - candidateDuration) <= 12000;
+
+    const alreadyPlayed = recentPlayed.some(
+      (played) => played.url === candidate.url,
+    );
+
+    // Reject same name family (covers/reuploads/lyrics edits of the same song)
+    const sameSongFamily = heavyTitleOverlap && closeDuration;
+
+    return alreadyPlayed || sameTitle || sameSongFamily;
+  };
+
+  const videoId = extractYouTubeVideoId(seedTrack.url);
+
+  const recommendationSources = [
+    ...(videoId ?
+      [
+        {
+          query: `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`,
+          isUrl: true,
+          label: "yt-radio",
+        },
+        {
+          query: `https://www.youtube.com/watch?v=${videoId}&list=RDMM`,
+          isUrl: true,
+          label: "yt-mix",
+        },
+      ]
+    : []),
+    { query: `${seedTrack.author} mix`, isUrl: false, label: "search-mix" },
+    {
+      query: `${seedTrack.author} similar songs`,
+      isUrl: false,
+      label: "search-similar",
+    },
+  ];
+
+  try {
+    let nextTrack = null;
+
+    for (const source of recommendationSources) {
+      const result = await player.search(source.query, {
+        requestedBy: seedTrack.requestedBy,
+        ...(source.isUrl ? {} : { searchEngine: QueryType.YOUTUBE_SEARCH }),
+      });
+
+      if (!result?.hasTracks()) continue;
+
+      nextTrack = result.tracks.find((track) => !isNearDuplicate(track));
+
+      if (nextTrack) {
+        console.log(`[Player] Autoplay fallback source: ${source.label}`);
+        break;
+      }
+    }
+
+    if (!nextTrack) {
+      console.log(
+        "[Player] Autoplay fallback could not find a non-duplicate recommendation.",
+      );
+      return;
+    }
+
+    queue.addTrack(nextTrack);
+    if (!queue.isPlaying()) await queue.node.play();
+
+    console.log(`[Player] Autoplay fallback queued: ${nextTrack.title}`);
+  } catch (error) {
+    console.error("[Player] Autoplay fallback failed:", error.message);
   }
 });
 
@@ -113,8 +274,6 @@ player.events.on("error", (queue, error) => {
 player.events.on("playerError", (queue, error) => {
   console.error("[Player Error - track]", error);
 });
-
-
 
 // ─── Load Commands ────────────────────────────────────────────────────────────
 client.commands = new Collection();
