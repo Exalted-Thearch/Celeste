@@ -126,6 +126,10 @@ player.events.on("emptyQueue", async (queue) => {
   }
 
   const recentPlayed = queue.history?.tracks?.toArray?.()?.slice(-15) || [];
+  const seedMeta =
+    seedTrack.sourceInfo || seedTrack.metadata?.sourceInfo || null;
+  const seedTitle = seedMeta?.title || seedTrack.title;
+  const seedAuthor = seedMeta?.author || seedTrack.author;
 
   const normalizeTitle = (title = "") =>
     title
@@ -176,9 +180,8 @@ player.events.on("emptyQueue", async (queue) => {
     if (!candidate || candidate.url === seedTrack.url) return true;
 
     const sameTitle =
-      normalizeTitle(candidate.title) === normalizeTitle(seedTrack.title);
-    const heavyTitleOverlap =
-      tokenOverlap(candidate.title, seedTrack.title) >= 0.8;
+      normalizeTitle(candidate.title) === normalizeTitle(seedTitle);
+    const heavyTitleOverlap = tokenOverlap(candidate.title, seedTitle) >= 0.8;
 
     const seedDuration = Number(seedTrack.durationMS || 0);
     const candidateDuration = Number(candidate.durationMS || 0);
@@ -214,9 +217,14 @@ player.events.on("emptyQueue", async (queue) => {
         },
       ]
     : []),
-    { query: `${seedTrack.author} mix`, isUrl: false, label: "search-mix" },
+  {
+      query: `${seedTitle} ${seedAuthor}`,
+      isUrl: false,
+      label: "search-seed",
+    },
+    { query: `${seedAuthor} mix`, isUrl: false, label: "search-mix" },
     {
-      query: `${seedTrack.author} similar songs`,
+      query: `${seedAuthor} similar songs`,
       isUrl: false,
       label: "search-similar",
     },

@@ -40,74 +40,81 @@ const ICONS = {
  *  [🔀] [⏹️] [⏸️ primary] [⏭️] [🔁]
  */
 function createTrackMessage(track, state = "Playing", queue = null) {
-  const isPaused  = state === "Paused";
-  const isQueued  = state === "Added to Queue";
+  const isPaused = state === "Paused";
+  const isQueued = state === "Added to Queue";
   const isPlaying = state === "Playing" || isPaused;
 
-  const sp        = track.spotifyInfo ?? track.metadata?.spotifyInfo ?? null;
-  const isSpotify = !!sp;
-  
+  const sourceInfo =
+    track.sourceInfo ??
+    track.spotifyInfo ??
+    track.metadata?.sourceInfo ??
+    track.metadata?.spotifyInfo ??
+    null;
+
   const extId = track.extractor?.identifier || "";
-  const isApple = extId.includes("apple-music");
-  const isSoundCloud = extId.includes("soundcloud");
+  const sourceType = sourceInfo?.source || null;
+  const isSpotify = sourceType === "spotify";
+  const isApple = sourceType === "appleMusic" || extId.includes("apple-music");
+  const isSoundCloud =
+    sourceType === "soundcloud" || extId.includes("soundcloud");
 
-  const title     = sp?.title     || track.title     || "Unknown Title";
-  const author    = sp?.author    || track.author    || "Unknown Artist";
-  const url       = sp?.url       || track.url       || null;
-  const thumbnail = sp?.thumbnail || track.thumbnail || null;
-  const duration  = sp?.duration  || track.duration  || null;
+  const title = sourceInfo?.title || track.title || "Unknown Title";
+  const author = sourceInfo?.author || track.author || "Unknown Artist";
+  const url = sourceInfo?.url || track.url || null;
+  const thumbnail = sourceInfo?.thumbnail || track.thumbnail || null;
+  const duration = sourceInfo?.duration || track.duration || null;
 
-  let accentColor = 0x5865F2; // Default YouTube/Discord Blue
-  let sourceIcon  = ICONS.youtube;
-  let sourceName  = "YouTube";
+  let accentColor = 0xf25858;
+  let sourceIcon = ICONS.youtube;
+  let sourceName = "YouTube";
 
   if (isSpotify) {
-    accentColor = 0x1DB954;
-    sourceIcon  = ICONS.spotify;
-    sourceName  = "Spotify";
+    accentColor = 0x1db954;
+    sourceIcon = ICONS.spotify;
+    sourceName = "Spotify";
   } else if (isApple) {
-    accentColor = 0xFA243C;
-    sourceIcon  = ICONS.appleMusic;
-    sourceName  = "Apple Music";
+    accentColor = 0xfa243c;
+    sourceIcon = ICONS.appleMusic;
+    sourceName = "Apple Music";
   } else if (isSoundCloud) {
-    accentColor = 0xFF3300;
-    sourceIcon  = ICONS.soundcloud;
-    sourceName  = "SoundCloud";
+    accentColor = 0xff3300;
+    sourceIcon = ICONS.soundcloud;
+    sourceName = "SoundCloud";
   }
 
   // ── State label (top of card) ─────────────────────────────────────────────────
   // "▸ Now Playing" / "▸ Paused" / "🎵 Added to Queue  `#2`"
   let stateLine;
   if (isQueued && queue) {
-    stateLine = `🎵 **Added to Queue** \`#${queue.tracks.size}\``;
+    stateLine = `<:vinylrecord:1483465811854229685> **Added to Queue** \`#${queue.tracks.size}\``;
   } else if (isPaused) {
     stateLine = `⏸ **Paused**`;
   } else {
-    stateLine = `▸ **Now Playing**`;
+    stateLine = `<:musicalnote:1483465838026690662> **Now Playing**`;
   }
 
   // ── Main section: state / title / artist + thumbnail ─────────────────────────
   // -# prefix = Discord's small muted subtext in Components V2
-  const titleLine  = url ? `### [${title}](${url})` : `### ${title}`;
+  const titleLine = url ? `### [${title}](${url})` : `### ${title}`;
   const authorLine = `-# ${author}`;
 
-  const mainSection = new SectionBuilder()
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(stateLine),
-      new TextDisplayBuilder().setContent(titleLine),
-      new TextDisplayBuilder().setContent(authorLine),
-    );
+  const mainSection = new SectionBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(stateLine),
+    new TextDisplayBuilder().setContent(titleLine),
+    new TextDisplayBuilder().setContent(authorLine),
+  );
 
   if (thumbnail) {
-    mainSection.setThumbnailAccessory(
-      new ThumbnailBuilder().setURL(thumbnail)
-    );
+    mainSection.setThumbnailAccessory(new ThumbnailBuilder().setURL(thumbnail));
   }
 
   // ── Meta line: source · duration · requested by ───────────────────────────────
   const metaParts = [`${sourceIcon} ${sourceName}`];
   if (duration) metaParts.push(`⏱ ${duration}`);
-  if (track.requestedBy) metaParts.push(`👤 ${track.requestedBy.displayName || track.requestedBy.username || track.requestedBy}`);
+  if (track.requestedBy)
+    metaParts.push(
+      `👤 ${track.requestedBy.displayName || track.requestedBy.username || track.requestedBy}`,
+    );
 
   // ── Progress bar (playing/paused only) ────────────────────────────────────────
   let progressBar = null;
@@ -115,7 +122,9 @@ function createTrackMessage(track, state = "Playing", queue = null) {
     try {
       const bar = queue.node.createProgressBar({ timecodes: true, length: 19 });
       if (bar) progressBar = bar;
-    } catch { /* unavailable — skip silently */ }
+    } catch {
+      /* unavailable — skip silently */
+    }
   }
 
   // ── Assemble container ────────────────────────────────────────────────────────
@@ -126,21 +135,25 @@ function createTrackMessage(track, state = "Playing", queue = null) {
 
   // Thin spacer
   container.addSeparatorComponents(
-    new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false)
+    new SeparatorBuilder()
+      .setSpacing(SeparatorSpacingSize.Small)
+      .setDivider(false),
   );
 
   // Meta row — muted with -# prefix
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`-# ${metaParts.join("  ·  ")}`)
+    new TextDisplayBuilder().setContent(`-# ${metaParts.join("  ·  ")}`),
   );
 
   // Progress bar with a divider above it
   if (progressBar) {
     container.addSeparatorComponents(
-      new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+      new SeparatorBuilder()
+        .setSpacing(SeparatorSpacingSize.Small)
+        .setDivider(true),
     );
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`\`${progressBar}\``)
+      new TextDisplayBuilder().setContent(`\`${progressBar}\``),
     );
   }
 
@@ -148,23 +161,23 @@ function createTrackMessage(track, state = "Playing", queue = null) {
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("shuffle")
-      .setEmoji("🔀")
+      .setEmoji("1483467751019380817")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("stop")
-      .setEmoji("⏹️")
+      .setEmoji("1483467796418527353")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("pause_resume")
-      .setEmoji(isPaused ? "▶️" : "⏸️")
+      .setEmoji(isPaused ? "1483468453858906244" : "1483467759114391552")
       .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId("skip")
-      .setEmoji("⏭️")
+      .setEmoji("1483467742504947824")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("loop")
-      .setEmoji("🔁")
+      .setEmoji("1483467778886467605")
       .setStyle(ButtonStyle.Secondary),
   );
 
@@ -199,41 +212,66 @@ async function handleButtonInteraction(interaction) {
         const isPaused = queue.node.isPaused();
         isPaused ? queue.node.setPaused(false) : queue.node.setPaused(true);
         await interaction.update(
-          createTrackMessage(queue.currentTrack, isPaused ? "Playing" : "Paused", queue)
+          createTrackMessage(
+            queue.currentTrack,
+            isPaused ? "Playing" : "Paused",
+            queue,
+          ),
         );
         break;
       }
       case "skip":
         queue.node.skip();
-        await interaction.reply({ content: `✅ Skipped by ${interaction.user.displayName}` });
+        await interaction.reply({
+          content: `✅ Skipped by ${interaction.user.displayName}`,
+        });
         break;
       case "stop":
         queue.delete();
-        await interaction.reply({ content: `⏹️ Stopped by ${interaction.user.displayName}. Cleared queue.` });
+        await interaction.reply({
+          content: `⏹️ Stopped by ${interaction.user.displayName}. Cleared queue.`,
+        });
         break;
       case "shuffle":
         if (!queue.tracks.size) {
-          return interaction.reply({ content: "❌ The queue is empty!", flags: MessageFlags.Ephemeral });
+          return interaction.reply({
+            content: "❌ The queue is empty!",
+            flags: MessageFlags.Ephemeral,
+          });
         }
         queue.tracks.shuffle();
-        await interaction.reply({ content: `🔀 Shuffled **${queue.tracks.size}** tracks!` });
+        await interaction.reply({
+          content: `🔀 Shuffled **${queue.tracks.size}** tracks!`,
+        });
         break;
       case "loop": {
         const { QueueRepeatMode } = require("discord-player");
         const mode = queue.repeatMode;
         let newMode, modeName;
-        if (mode === QueueRepeatMode.OFF)        { newMode = QueueRepeatMode.TRACK; modeName = "Track"; }
-        else if (mode === QueueRepeatMode.TRACK) { newMode = QueueRepeatMode.QUEUE; modeName = "Queue"; }
-        else                                     { newMode = QueueRepeatMode.OFF;   modeName = "Off";   }
+        if (mode === QueueRepeatMode.OFF) {
+          newMode = QueueRepeatMode.TRACK;
+          modeName = "Track";
+        } else if (mode === QueueRepeatMode.TRACK) {
+          newMode = QueueRepeatMode.QUEUE;
+          modeName = "Queue";
+        } else {
+          newMode = QueueRepeatMode.OFF;
+          modeName = "Off";
+        }
         queue.setRepeatMode(newMode);
-        await interaction.reply({ content: `🔁 Loop mode set to **${modeName}**` });
+        await interaction.reply({
+          content: `🔁 Loop mode set to **${modeName}**`,
+        });
         break;
       }
     }
   } catch (err) {
     console.error("[Button Handler Error]", err);
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: `❌ Error: ${err.message}`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({
+        content: `❌ Error: ${err.message}`,
+        flags: MessageFlags.Ephemeral,
+      });
     }
   }
 }

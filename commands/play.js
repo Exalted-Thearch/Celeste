@@ -102,19 +102,73 @@ module.exports = {
       const { QueryType } = require("discord-player");
 
       let res;
-      let spotifyMeta = null; // will hold { title, author, thumbnail, url, duration }
+      let sourceMeta = null; // { title, author, thumbnail, url, duration, source
+      let forceSingleTrack = false;
       const isUrl = /^(https?:\/\/)/.test(query);
 
       // ── 1. Direct URL ────────────────────────────────────────────────────────
       if (isUrl) {
-        res = await player.search(query, { requestedBy: interaction.user });
+        const sourceType = detectUrlSource(query);
 
+        // SoundCloud previews and Apple Music DRM links are unreliable for
+        // direct streaming, so we resolve metadata and then play equivalent
+        // YouTube audio while preserving original source info in the card.
+        if (sourceType === "soundcloud" || sourceType === "appleMusic") {
+          let seedTrack = null;
+
+          // Extractor lookup first (works well for SoundCloud, sometimes Apple)
+          const sourceRes = await player.search(query, {
+            requestedBy: interaction.user,
+          });
+          if (sourceRes?.hasTracks()) {
+            seedTrack = sourceRes.tracks[0];
+          }
+
+          // Apple Music fallback metadata lookup via iTunes API when extractor
+          // cannot resolve the URL.
+          if (!seedTrack && sourceType === "appleMusic") {
+            const appleMeta = await resolveAppleMusicMetadata(query);
+            if (appleMeta) {
+              seedTrack = {
+                title: appleMeta.title,
+                author: appleMeta.author,
+                thumbnail: appleMeta.thumbnail,
+                duration: appleMeta.duration,
+              };
+            }
+          }
+
+          if (seedTrack) {
+            sourceMeta = {
+              title: seedTrack.title,
+              author: seedTrack.author,
+              thumbnail: seedTrack.thumbnail,
+              url: query,
+              duration: seedTrack.duration,
+              source: sourceType,
+            };
+
+            const ytQuery = `${seedTrack.title} ${seedTrack.author}`;
+            forceSingleTrack = true;
+            res = await player.search(ytQuery, {
+              requestedBy: interaction.user,
+              searchEngine: QueryType.YOUTUBE_SEARCH,
+            });
+          }
+
+          // Last fallback for any URL that still did not resolve.
+          if (!res?.hasTracks()) {
+            res = await player.search(query, { requestedBy: interaction.user });
+          }
+        } else {
+          res = await player.search(query, { requestedBy: interaction.user });
+        }
         // ── 2. Autocomplete-selected Spotify result ──────────────────────────────
       } else if (query.startsWith("sp_")) {
         const cached = getCached(query);
 
         if (cached) {
-          spotifyMeta = cached;
+          sourceMeta = { ...cached, source: "spotify" };
           const ytQuery = `${cached.title} ${cached.author}`;
           res = await player.search(ytQuery, {
             requestedBy: interaction.user,
@@ -145,12 +199,13 @@ module.exports = {
 
         if (spotifyTracks.length > 0) {
           const t = spotifyTracks[0];
-          spotifyMeta = {
+          sourceMeta = {
             title: t.name,
             author: t.artists.map((a) => a.name).join(", "),
             thumbnail: t.album?.images?.[0]?.url ?? null,
             url: t.external_urls.spotify,
             duration: msToTimestamp(t.duration_ms),
+            source: "spotify",
           };
 
           // Use clean Spotify title+artist to get correct YouTube audio
@@ -161,9 +216,9 @@ module.exports = {
           });
           console.log(
             "[Spotify meta] →",
-            spotifyMeta.title,
+            sourceMeta.title,
             "by",
-            spotifyMeta.author,
+            sourceMeta.author,
             "| YT tracks:",
             res?.tracks?.length ?? 0,
           );
@@ -172,7 +227,7 @@ module.exports = {
         // Fallback: no Spotify result → search YouTube directly
         if (!res?.hasTracks()) {
           console.log("[YouTube fallback]", query);
-          spotifyMeta = null;
+          sourceMeta = null;
           res = await player.search(query, {
             requestedBy: interaction.user,
             searchEngine: QueryType.YOUTUBE_SEARCH,
@@ -194,14 +249,20 @@ module.exports = {
         }
         if (tracks.length > 100) tracks = tracks.slice(0, 100);
       }
-
-      if (!isPlaylist && tracks.length > 1 && !isUrl) {
+      if (!isPlaylist && tracks.length > 1 && (!isUrl || forceSingleTrack)) {
         tracks = [tracks[0]];
       }
 
       // Inject Spotify metadata into the track object so ui.js can use it
-      if (spotifyMeta && tracks[0]) {
-        tracks[0].spotifyInfo = spotifyMeta;
+      // Normalize displayed duration for URL-derived metadata when source
+      // extractors return preview lengths (e.g. SoundCloud 0:30).
+      if (sourceMeta && tracks[0]) {
+        sourceMeta.duration =
+          shouldUseAudioDuration(sourceMeta.duration) ?
+            tracks[0].duration
+          : sourceMeta.duration;
+
+        tracks[0].sourceInfo = sourceMeta;
       }
 
       const queue = player.nodes.create(interaction.guild, {
@@ -250,4 +311,68 @@ function msToTimestamp(ms) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function shouldUseAudioDuration(value) {
+  if (!value) return true;
+  return value === "0:30" || value === "0:29" || value === "0:31";
+}
+
+async function resolveAppleMusicMetadata(value) {
+  try {
+    const parsed = new URL(value);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const country = segments[0] || "us";
+
+    const queryTrackId = parsed.searchParams.get("i");
+    const numericPathId = [...segments]
+      .reverse()
+      .find((part) => /^\d+$/.test(part));
+    const prefixedPathId = segments
+      .map((part) => {
+        const match = part.match(/^id(\d+)$/);
+        return match ? match[1] : null;
+      })
+      .find(Boolean);
+
+    const lookupId = queryTrackId || prefixedPathId || numericPathId;
+    if (!lookupId) return null;
+
+    const response = await fetch(
+      `https://itunes.apple.com/lookup?id=${lookupId}&entity=song&country=${country}`,
+    );
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const song = data?.results?.find((item) => item.wrapperType === "track");
+    const collection = data?.results?.find(
+      (item) => item.wrapperType === "collection",
+    );
+    if (!song && !collection) return null;
+
+    const resolved = song || collection;
+
+    return {
+      title: resolved.trackName || resolved.collectionName,
+      author: resolved.artistName,
+      thumbnail: resolved.artworkUrl100?.replace("100x100", "600x600") ?? null,
+      duration:
+        resolved.trackTimeMillis ?
+          msToTimestamp(resolved.trackTimeMillis)
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function detectUrlSource(value) {
+  try {
+    const { hostname } = new URL(value);
+    if (hostname.includes("soundcloud.com")) return "soundcloud";
+    if (hostname.includes("music.apple.com")) return "appleMusic";
+  } catch {
+    return null;
+  }
+  return null;
 }
