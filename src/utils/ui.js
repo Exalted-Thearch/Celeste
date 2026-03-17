@@ -1,56 +1,160 @@
 const {
-  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  ContainerBuilder,
+  SectionBuilder,
+  TextDisplayBuilder,
+  ThumbnailBuilder,
+  SeparatorBuilder,
 } = require("discord.js");
+
+// SeparatorSpacingSize raw values (not always exported by discord.js)
+const SeparatorSpacingSize = { Small: 1, Large: 2 };
+
 const config = require("../../config");
 
+const ICONS = {
+  spotify: "<:spotify:1483160867838365706>",
+  youtube: "<:ytMusic:1483161271711957114>",
+};
+
 /**
- * Creates a standard V2 Component layout for music playback.
- * Returns the message payload containing 'embeds' and 'components'.
+ * Creates a Components V2 music card.
+ *
+ * Layout (matching preview):
+ *
+ *  ┌─[accent bar]──────────────────────────────┐
+ *  │  ▸ Now Playing              #2 (if queued) │
+ *  │                                            │
+ *  │  ### Track Title            [thumbnail]    │
+ *  │  -# Artist Name                            │
+ *  │                                            │
+ *  │  -# 🟢 Spotify  ·  ⏱ 5:16  ·  👤 @user   │
+ *  │  ──────────────────────────────────────    │
+ *  │  `▬▬▬●──────── 2:01 / 5:16`               │
+ *  └────────────────────────────────────────────┘
+ *  [🔀] [⏹️] [⏸️ primary] [⏭️] [🔁]
  */
-function createTrackMessage(track, state = "Playing") {
-  const isPaused = state === "Paused";
+function createTrackMessage(track, state = "Playing", queue = null) {
+  const isPaused  = state === "Paused";
+  const isQueued  = state === "Added to Queue";
+  const isPlaying = state === "Playing" || isPaused;
 
-  const embed = new EmbedBuilder()
-    .setColor(config.embedColor)
-    .setAuthor({ name: `🎵 Now ${state}` })
-    .setDescription(
-      `**[${track.title}](${track.url})**\n\`${track.author}\`  •  \`Duration - ${track.duration}\`\nRequested by ${track.requestedBy}`,
-    )
-    .setThumbnail(track.thumbnail);
+  // Resolve Spotify metadata injected by play.js, fallback to track fields
+  const sp        = track.spotifyInfo ?? track.metadata?.spotifyInfo ?? null;
+  const isSpotify = !!sp;
+  const title     = sp?.title     || track.title     || "Unknown Title";
+  const author    = sp?.author    || track.author    || "Unknown Artist";
+  const url       = sp?.url       || track.url       || null;
+  const thumbnail = sp?.thumbnail || track.thumbnail || null;
+  const duration  = sp?.duration  || track.duration  || null;
 
-  const row = new ActionRowBuilder().addComponents(
+  const accentColor = isSpotify ? 0x1DB954 : 0x5865F2;
+  const sourceIcon  = isSpotify ? ICONS.spotify : ICONS.youtube;
+  const sourceName  = isSpotify ? "Spotify" : "YouTube";
+
+  // ── State label (top of card) ─────────────────────────────────────────────────
+  // "▸ Now Playing" / "▸ Paused" / "🎵 Added to Queue  `#2`"
+  let stateLine;
+  if (isQueued && queue) {
+    stateLine = `🎵 **Added to Queue** \`#${queue.tracks.size}\``;
+  } else if (isPaused) {
+    stateLine = `⏸ **Paused**`;
+  } else {
+    stateLine = `▸ **Now Playing**`;
+  }
+
+  // ── Main section: state / title / artist + thumbnail ─────────────────────────
+  // -# prefix = Discord's small muted subtext in Components V2
+  const titleLine  = url ? `### [${title}](${url})` : `### ${title}`;
+  const authorLine = `-# ${author}`;
+
+  const mainSection = new SectionBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(stateLine),
+      new TextDisplayBuilder().setContent(titleLine),
+      new TextDisplayBuilder().setContent(authorLine),
+    );
+
+  if (thumbnail) {
+    mainSection.setThumbnailAccessory(
+      new ThumbnailBuilder().setURL(thumbnail)
+    );
+  }
+
+  // ── Meta line: source · duration · requested by ───────────────────────────────
+  const metaParts = [`${sourceIcon} ${sourceName}`];
+  if (duration) metaParts.push(`⏱ ${duration}`);
+  if (track.requestedBy) metaParts.push(`👤 ${track.requestedBy.displayName || track.requestedBy.username || track.requestedBy}`);
+
+  // ── Progress bar (playing/paused only) ────────────────────────────────────────
+  let progressBar = null;
+  if (isPlaying && queue) {
+    try {
+      const bar = queue.node.createProgressBar({ timecodes: true, length: 19 });
+      if (bar) progressBar = bar;
+    } catch { /* unavailable — skip silently */ }
+  }
+
+  // ── Assemble container ────────────────────────────────────────────────────────
+  const container = new ContainerBuilder().setAccentColor(accentColor);
+
+  // Main content (state + title + artist + thumbnail)
+  container.addSectionComponents(mainSection);
+
+  // Thin spacer
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false)
+  );
+
+  // Meta row — muted with -# prefix
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`-# ${metaParts.join("  ·  ")}`)
+  );
+
+  // Progress bar with a divider above it
+  if (progressBar) {
+    container.addSeparatorComponents(
+      new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+    );
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`\`${progressBar}\``)
+    );
+  }
+
+  // ── Playback controls ─────────────────────────────────────────────────────────
+  const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("btn_shuffle")
+      .setCustomId("shuffle")
       .setEmoji("🔀")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("btn_stop")
+      .setCustomId("stop")
       .setEmoji("⏹️")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("btn_play_pause")
+      .setCustomId("pause_resume")
       .setEmoji(isPaused ? "▶️" : "⏸️")
       .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId("btn_skip")
+      .setCustomId("skip")
       .setEmoji("⏭️")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId("btn_loop")
+      .setCustomId("loop")
       .setEmoji("🔁")
       .setStyle(ButtonStyle.Secondary),
   );
 
   return {
-    embeds: [embed],
-    components: [row],
+    components: [container, controls],
+    flags: MessageFlags.IsComponentsV2,
   };
 }
 
+// ── Button handler ────────────────────────────────────────────────────────────
 async function handleButtonInteraction(interaction) {
   const { useQueue } = require("discord-player");
   const queue = useQueue(interaction.guildId);
@@ -62,7 +166,6 @@ async function handleButtonInteraction(interaction) {
     });
   }
 
-  // Must be in the same voice channel to use buttons safely
   if (interaction.member.voice.channelId !== queue.dispatcher?.channel?.id) {
     return interaction.reply({
       content: "❌ You must be in the same voice channel to use these buttons.",
@@ -72,105 +175,47 @@ async function handleButtonInteraction(interaction) {
 
   try {
     switch (interaction.customId) {
-      case "btn_play_pause":
+      case "pause_resume": {
         const isPaused = queue.node.isPaused();
         isPaused ? queue.node.setPaused(false) : queue.node.setPaused(true);
-
-        // Update the message with the new state
-        const track = queue.currentTrack;
         await interaction.update(
-          createTrackMessage(track, isPaused ? "Playing" : "Paused"),
+          createTrackMessage(queue.currentTrack, isPaused ? "Playing" : "Paused", queue)
         );
         break;
-
-      case "btn_skip":
+      }
+      case "skip":
         queue.node.skip();
-        await interaction.reply({
-          content: `✅ Skipped by ${interaction.user}`,
-        });
+        await interaction.reply({ content: `✅ Skipped by ${interaction.user.displayName}` });
         break;
-
-      case "btn_stop":
+      case "stop":
         queue.delete();
-        await interaction.reply({
-          content: `⏹️ Stopped by ${interaction.user}. Cleared queue.`,
-        });
+        await interaction.reply({ content: `⏹️ Stopped by ${interaction.user.displayName}. Cleared queue.` });
         break;
-
-      case "btn_shuffle":
+      case "shuffle":
         if (!queue.tracks.size) {
-          return interaction.reply({
-            content: "❌ The queue is empty!",
-            flags: MessageFlags.Ephemeral,
-          });
+          return interaction.reply({ content: "❌ The queue is empty!", flags: MessageFlags.Ephemeral });
         }
         queue.tracks.shuffle();
-        await interaction.reply({
-          content: `🔀 Shuffled **${queue.tracks.size}** tracks!`,
-        });
+        await interaction.reply({ content: `🔀 Shuffled **${queue.tracks.size}** tracks!` });
         break;
-
-      case "btn_loop":
+      case "loop": {
         const { QueueRepeatMode } = require("discord-player");
-        const currentMode = queue.repeatMode;
-        // Simple toggle: Off -> Track -> Queue -> Off
-        let newMode;
-        let modeName;
-        if (currentMode === QueueRepeatMode.OFF) {
-          newMode = QueueRepeatMode.TRACK;
-          modeName = "Track";
-        } else if (currentMode === QueueRepeatMode.TRACK) {
-          newMode = QueueRepeatMode.QUEUE;
-          modeName = "Queue";
-        } else {
-          newMode = QueueRepeatMode.OFF;
-          modeName = "Off";
-        }
+        const mode = queue.repeatMode;
+        let newMode, modeName;
+        if (mode === QueueRepeatMode.OFF)        { newMode = QueueRepeatMode.TRACK; modeName = "Track"; }
+        else if (mode === QueueRepeatMode.TRACK) { newMode = QueueRepeatMode.QUEUE; modeName = "Queue"; }
+        else                                     { newMode = QueueRepeatMode.OFF;   modeName = "Off";   }
         queue.setRepeatMode(newMode);
-        await interaction.reply({
-          content: `🔁 Loop mode set to **${modeName}**`,
-        });
+        await interaction.reply({ content: `🔁 Loop mode set to **${modeName}**` });
         break;
-
-      case "btn_queue_prev":
-      case "btn_queue_next":
-        // For queue pagination, we grab the page from the message content visually, or rely on a generic re-run.
-        // To keep it simple, we just re-run the queue command logic via the client's command handler.
-        const cmd = interaction.client.commands.get("queue");
-        if (cmd) {
-          // Extract page from embed author of the message
-          const author = interaction.message.embeds[0]?.author?.name || "";
-          const match = author.match(/Page (\d+)/);
-          let currentPage = match ? parseInt(match[1]) : 1;
-
-          if (interaction.customId === "btn_queue_prev") currentPage--;
-          if (interaction.customId === "btn_queue_next") currentPage++;
-
-          // Ensure page stays within valid range
-          if (currentPage < 1) currentPage = 1;
-
-          // Mock the options to pass to the execute function
-          interaction.options = { getInteger: () => currentPage };
-          // Tell interaction.reply to update instead
-          const originalReply = interaction.reply.bind(interaction);
-          interaction.reply = interaction.update.bind(interaction);
-          await cmd.execute(interaction.client, interaction);
-          interaction.reply = originalReply;
-        }
-        break;
+      }
     }
   } catch (err) {
     console.error("[Button Handler Error]", err);
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: `❌ Error: ${err.message}`,
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: `❌ Error: ${err.message}`, flags: MessageFlags.Ephemeral });
     }
   }
 }
 
-module.exports = {
-  createTrackMessage,
-  handleButtonInteraction,
-};
+module.exports = { createTrackMessage, handleButtonInteraction };

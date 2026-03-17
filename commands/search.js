@@ -41,12 +41,25 @@ module.exports = {
       const player = useMainPlayer();
       const { QueryType } = require('discord-player');
       
-      let results = await player.search(query, { 
-        requestedBy: interaction.user,
-        searchEngine: QueryType[platform] 
-      });
-
+      let results;
       let fallbackText = '';
+
+      if (platform === 'SPOTIFY_SEARCH') {
+        const { searchSpotify } = require('../src/utils/spotify');
+        const spotifyTracks = await searchSpotify(query);
+
+        if (spotifyTracks.length > 0) {
+          const spotifyUrl = spotifyTracks[0].external_urls.spotify;
+          results = await player.search(spotifyUrl, { requestedBy: interaction.user });
+          console.log('[Spotify Search Command] Found via API →', spotifyUrl);
+        }
+      } else {
+        results = await player.search(query, { 
+          requestedBy: interaction.user,
+          searchEngine: QueryType[platform] 
+        });
+      }
+
       if (!results || !results.tracks.length) {
         if (platform !== 'YOUTUBE_SEARCH') {
           fallbackText = `\n*(Note: No results found on ${platform.split('_')[0]}, showing YouTube results instead)*`;
@@ -104,12 +117,12 @@ module.exports = {
         });
 
         const { createTrackMessage } = require('../src/utils/ui');
-        const trackMsg = createTrackMessage(track, 'Added to Queue');
+        const queue = useQueue(interaction.guildId);
+        const ui = createTrackMessage(track, 'Added to Queue', queue);
 
         await interaction.editReply({
           content: null,
-          embeds: trackMsg.embeds,
-          components: [],
+          ...ui,
         });
 
         collector.stop();

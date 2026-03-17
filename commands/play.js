@@ -1,110 +1,187 @@
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const { useMainPlayer } = require('discord-player');
-const config = require('../config');
+const { SlashCommandBuilder, MessageFlags } = require("discord.js");
+const { useMainPlayer } = require("discord-player");
+const { searchSpotify } = require("../src/utils/spotify");
+const config = require("../config");
+
+// ── Short-lived autocomplete cache ────────────────────────────────────────────
+// Stores Spotify track metadata keyed by a short ID so we stay under Discord's
+// 100-char autocomplete value limit. Entries expire after 5 minutes.
+const _autoCache = new Map();
+function cacheTrack(track) {
+  const key = `sp_${track.id}`;
+  _autoCache.set(key, {
+    title: track.name,
+    author: track.artists.map((a) => a.name).join(", "),
+    thumbnail: track.album?.images?.[0]?.url ?? null,
+    url: track.external_urls.spotify,
+    duration: msToTimestamp(track.duration_ms),
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  });
+  return key;
+}
+function getCached(key) {
+  const entry = _autoCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    _autoCache.delete(key);
+    return null;
+  }
+  return entry;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
-    .setName('play')
-    .setDescription('Play a song from YouTube, Spotify, SoundCloud and more')
+    .setName("play")
+    .setDescription("Play a song from Spotify, YouTube and more")
     .addStringOption((o) =>
-      o.setName('query')
-        .setDescription('Song name or URL')
+      o
+        .setName("query")
+        .setDescription("Song name or URL")
         .setRequired(true)
         .setAutocomplete(true),
     ),
 
-  // Autocomplete: suggest top 5 results as the user types
+  // ── Autocomplete ──────────────────────────────────────────────────────────────
   async autocomplete(interaction) {
     const query = interaction.options.getFocused();
     if (!query?.trim()) return interaction.respond([]);
-
-    // Don't suggest if it's already a URL
     if (/^(https?:\/\/)/.test(query)) return interaction.respond([]);
 
     try {
-      const player = useMainPlayer();
-      const { QueryType } = require('discord-player');
-
-      // Attempt Spotify search for autocomplete first to match execute logic
-      let res = await player.search(query, { 
-        requestedBy: interaction.user,
-        searchEngine: QueryType.SPOTIFY_SEARCH 
-      });
-
-      if (!res || !res.hasTracks()) {
-        res = await player.search(query, { 
-          requestedBy: interaction.user,
-          searchEngine: QueryType.YOUTUBE_SEARCH 
-        });
-      }
-
-      if (!res || !res.hasTracks()) return interaction.respond([]);
-
-      const tracks = res.tracks.slice(0, 5);
-      
-      // If the query is already "almost exact" (very similar to the top result),
-      // we can reduce the number of suggestions to keep it clean.
-      const topTrackTitle = tracks[0].title.toLowerCase();
-      const queryLower = query.toLowerCase();
-      
-      // If query is long and starts matching the top result closely, just show the top 1-2
-      if (query.length > 15 && topTrackTitle.includes(queryLower)) {
+      // Try Spotify first — clean "Title — Artist" format
+      const spotifyTracks = await searchSpotify(query, 5);
+      if (spotifyTracks.length > 0) {
         return interaction.respond(
-          tracks.slice(0, 2).map((t) => ({
-            name: `${t.title} — ${t.author}`.slice(0, 100),
-            value: t.url,
+          spotifyTracks.map((t) => ({
+            name: `${t.name} — ${t.artists.map((a) => a.name).join(", ")}`.slice(
+              0,
+              100,
+            ),
+            value: cacheTrack(t), // short key like "sp_abc123" — well under 100 chars
           })),
         );
       }
 
-      await interaction.respond(
-        tracks.map((t) => ({
+      // Fallback to YouTube
+      const player = useMainPlayer();
+      const { QueryType } = require("discord-player");
+      const res = await player.search(query, {
+        requestedBy: interaction.user,
+        searchEngine: QueryType.YOUTUBE_SEARCH,
+      });
+      if (!res?.hasTracks()) return interaction.respond([]);
+      return interaction.respond(
+        res.tracks.slice(0, 5).map((t) => ({
           name: `${t.title} — ${t.author}`.slice(0, 100),
           value: t.url,
         })),
       );
-    } catch {
-      await interaction.respond([]);
+    } catch (err) {
+      if (!interaction.responded) {
+        await interaction.respond([]).catch(() => {});
+      }
     }
   },
 
+  // ── Execute ───────────────────────────────────────────────────────────────────
   async execute(client, interaction) {
-    const query   = interaction.options.getString('query', true);
+    const query = interaction.options.getString("query", true);
     const channel = interaction.member?.voice?.channel;
 
     if (!channel) {
-      return interaction.reply({ content: '❌ You need to be in a voice channel!', flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        content: "❌ You need to be in a voice channel!",
+        flags: MessageFlags.Ephemeral,
+      });
     }
 
     await interaction.deferReply();
 
     try {
       const player = useMainPlayer();
-      const { QueryType } = require('discord-player');
-      
+      const { QueryType } = require("discord-player");
+
       let res;
+      let spotifyMeta = null; // will hold { title, author, thumbnail, url, duration }
       const isUrl = /^(https?:\/\/)/.test(query);
 
+      // ── 1. Direct URL ────────────────────────────────────────────────────────
       if (isUrl) {
-        // Direct URL playback
         res = await player.search(query, { requestedBy: interaction.user });
-      } else {
-        // Search priority: Spotify -> YouTube
-        res = await player.search(query, { 
-          requestedBy: interaction.user,
-          searchEngine: QueryType.SPOTIFY_SEARCH 
-        });
 
-        if (!res || !res.hasTracks()) {
-          res = await player.search(query, { 
+        // ── 2. Autocomplete-selected Spotify result ──────────────────────────────
+      } else if (query.startsWith("sp_")) {
+        const cached = getCached(query);
+
+        if (cached) {
+          spotifyMeta = cached;
+          const ytQuery = `${cached.title} ${cached.author}`;
+          res = await player.search(ytQuery, {
             requestedBy: interaction.user,
-            searchEngine: QueryType.YOUTUBE_SEARCH 
+            searchEngine: QueryType.YOUTUBE_SEARCH,
+          });
+          console.log(
+            "[Spotify cached] →",
+            cached.title,
+            "by",
+            cached.author,
+            "| YT tracks:",
+            res?.tracks?.length ?? 0,
+          );
+        }
+
+        // Cache miss (e.g. took too long) — fall back to plain text search
+        if (!res?.hasTracks()) {
+          res = await player.search(query, {
+            requestedBy: interaction.user,
+            searchEngine: QueryType.YOUTUBE_SEARCH,
+          });
+        }
+
+        // ── 3. Plain text query ──────────────────────────────────────────────────
+      } else {
+        // Search Spotify for metadata
+        const spotifyTracks = await searchSpotify(query, 1);
+
+        if (spotifyTracks.length > 0) {
+          const t = spotifyTracks[0];
+          spotifyMeta = {
+            title: t.name,
+            author: t.artists.map((a) => a.name).join(", "),
+            thumbnail: t.album?.images?.[0]?.url ?? null,
+            url: t.external_urls.spotify,
+            duration: msToTimestamp(t.duration_ms),
+          };
+
+          // Use clean Spotify title+artist to get correct YouTube audio
+          const ytQuery = `${t.name} ${t.artists.map((a) => a.name).join(" ")}`;
+          res = await player.search(ytQuery, {
+            requestedBy: interaction.user,
+            searchEngine: QueryType.YOUTUBE_SEARCH,
+          });
+          console.log(
+            "[Spotify meta] →",
+            spotifyMeta.title,
+            "by",
+            spotifyMeta.author,
+            "| YT tracks:",
+            res?.tracks?.length ?? 0,
+          );
+        }
+
+        // Fallback: no Spotify result → search YouTube directly
+        if (!res?.hasTracks()) {
+          console.log("[YouTube fallback]", query);
+          spotifyMeta = null;
+          res = await player.search(query, {
+            requestedBy: interaction.user,
+            searchEngine: QueryType.YOUTUBE_SEARCH,
           });
         }
       }
 
       if (!res || !res.hasTracks()) {
-        return interaction.editReply({ content: '❌ No results found' });
+        return interaction.editReply({ content: "❌ No results found." });
       }
 
       let tracks = [...res.tracks];
@@ -122,6 +199,11 @@ module.exports = {
         tracks = [tracks[0]];
       }
 
+      // Inject Spotify metadata into the track object so ui.js can use it
+      if (spotifyMeta && tracks[0]) {
+        tracks[0].spotifyInfo = spotifyMeta;
+      }
+
       const queue = player.nodes.create(interaction.guild, {
         metadata: { channel: interaction.channel },
         volume: config.defaultVolume,
@@ -134,23 +216,38 @@ module.exports = {
 
       try {
         if (!queue.connection) await queue.connect(channel);
-      } catch (err) {
+      } catch {
         player.nodes.delete(interaction.guildId);
-        return interaction.editReply({ content: '❌ Could not join your voice channel!' });
+        return interaction.editReply({
+          content: "❌ Could not join your voice channel!",
+        });
       }
 
       queue.addTrack(tracks);
       if (!queue.isPlaying()) await queue.node.play();
 
-      const { createTrackMessage } = require('../src/utils/ui');
+      const { createTrackMessage } = require("../src/utils/ui");
       if (isPlaylist) {
-        return interaction.editReply({ content: `✅ Added playlist **${res.playlist.title}** (${tracks.length} random tracks) to the queue.` });
+        return interaction.editReply({
+          content: `✅ Added playlist **${res.playlist.title}** (${tracks.length} random tracks) to the queue.`,
+        });
       } else {
-        return interaction.editReply(createTrackMessage(tracks[0], 'Added to Queue'));
+        const ui = createTrackMessage(tracks[0], "Added to Queue", queue);
+        return interaction.editReply({
+          ...ui,
+        });
       }
     } catch (err) {
-      console.error('[play]', err);
+      console.error("[play]", err);
       return interaction.editReply({ content: `❌ ${err.message}` });
     }
   },
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function msToTimestamp(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
