@@ -46,15 +46,6 @@ const player = new Player(client, {
       SoundCloudExtractor,
     } = require("@discord-player/extractor");
 
-    console.log(
-      "Spotify ID:",
-      config.spotifyClientId ? "✅ present" : "❌ MISSING",
-    );
-    console.log(
-      "Spotify Secret:",
-      config.spotifyClientSecret ? "✅ present" : "❌ MISSING",
-    );
-
     await player.extractors.register(SpotifyExtractor, {
       clientId: config.spotifyClientId,
       clientSecret: config.spotifyClientSecret,
@@ -82,8 +73,6 @@ const player = new Player(client, {
   } catch (err) {
     console.error("❌ Failed to load DefaultExtractors:", err.message);
   }
-
-  console.log("Registered extractors:", [...player.extractors.store.keys()]);
 })();
 
 const { createTrackMessage } = require("./src/utils/ui");
@@ -296,7 +285,6 @@ for (const file of commandFiles) {
     continue;
   }
   client.commands.set(cmd.data.name, cmd);
-  console.log(`  ✔ Command loaded: /${cmd.data.name}`);
 }
 
 // ─── Load Events ─────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ const config = require("../config");
 // Stores Spotify track metadata keyed by a short ID so we stay under Discord's
 // 100-char autocomplete value limit. Entries expire after 5 minutes.
 const _autoCache = new Map();
+const SPOTIFY_SEARCH_TIMEOUT_MS = 1200;
 function cacheTrack(track) {
   const key = `sp_${track.id}`;
   _autoCache.set(key, {
@@ -49,7 +50,10 @@ module.exports = {
 
     try {
       // Try Spotify first — clean "Title — Artist" format
-      const spotifyTracks = await searchSpotify(query, 5);
+        const spotifyTracks = await withTimeout(
+        searchSpotify(query, 5),
+        SPOTIFY_SEARCH_TIMEOUT_MS,
+      );
       if (spotifyTracks.length > 0) {
         return interaction.respond(
           spotifyTracks.map((t) => ({
@@ -195,7 +199,10 @@ module.exports = {
         // ── 3. Plain text query ──────────────────────────────────────────────────
       } else {
         // Search Spotify for metadata
-        const spotifyTracks = await searchSpotify(query, 1);
+        const spotifyTracks = await withTimeout(
+          searchSpotify(query, 1),
+          SPOTIFY_SEARCH_TIMEOUT_MS,
+        );
 
         if (spotifyTracks.length > 0) {
           const t = spotifyTracks[0];
@@ -375,4 +382,17 @@ function detectUrlSource(value) {
     return null;
   }
   return null;
+}
+async function withTimeout(promise, timeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve([]), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
