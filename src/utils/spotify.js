@@ -41,6 +41,22 @@ async function searchSpotify(query, limit = 5) {
   }
 }
 
+async function getSpotifyTrack(id) {
+  try {
+    const token = await getSpotifyToken();
+    const url = `https://api.spotify.com/v1/tracks/${id}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error("[Spotify API error - track]", err.message);
+    return null;
+  }
+}
+
 module.exports = {
   searchSpotify,
+  getSpotifyTrack,
 };

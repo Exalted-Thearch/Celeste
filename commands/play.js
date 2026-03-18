@@ -1,6 +1,6 @@
 const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 const { useMainPlayer } = require("discord-player");
-const { searchSpotify } = require("../src/utils/spotify");
+const { searchSpotify, getSpotifyTrack } = require("../src/utils/spotify");
 const config = require("../config");
 
 // ── Short-lived autocomplete cache ────────────────────────────────────────────
@@ -117,7 +117,11 @@ module.exports = {
         // SoundCloud previews and Apple Music DRM links are unreliable for
         // direct streaming, so we resolve metadata and then play equivalent
         // YouTube audio while preserving original source info in the card.
-        if (sourceType === "soundcloud" || sourceType === "appleMusic") {
+        if (
+          sourceType === "soundcloud" ||
+          sourceType === "appleMusic" ||
+          sourceType === "spotify"
+        ) {
           let seedTrack = null;
 
           // Extractor lookup first (works well for SoundCloud, sometimes Apple)
@@ -139,6 +143,23 @@ module.exports = {
                 thumbnail: appleMeta.thumbnail,
                 duration: appleMeta.duration,
               };
+            }
+          }
+
+          // Spotify metadata lookup via direct API for more reliable artcovers
+          if (sourceType === "spotify") {
+            const spotifyId = extractSpotifyId(query);
+            if (spotifyId) {
+              const spotifyMeta = await getSpotifyTrack(spotifyId);
+              if (spotifyMeta) {
+                // Prefer API values for high-quality artcover
+                seedTrack = {
+                  title: spotifyMeta.name,
+                  author: spotifyMeta.artists.map((a) => a.name).join(", "),
+                  thumbnail: spotifyMeta.album?.images?.[0]?.url ?? null,
+                  duration: msToTimestamp(spotifyMeta.duration_ms),
+                };
+              }
             }
           }
 
@@ -411,6 +432,21 @@ function parseTimestampToSeconds(value) {
   return null;
 }
 
+function extractSpotifyId(url) {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    // Standard format: /track/ID or /track/ID?si=...
+    const trackIndex = segments.indexOf("track");
+    if (trackIndex !== -1 && segments[trackIndex + 1]) {
+      return segments[trackIndex + 1];
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 async function resolveAppleMusicMetadata(value) {
   try {
     const parsed = new URL(value);
@@ -462,6 +498,7 @@ async function resolveAppleMusicMetadata(value) {
 function detectUrlSource(value) {
   try {
     const { hostname } = new URL(value);
+    if (hostname.includes("spotify.com") || hostname.includes("open.spotify.com")) return "spotify";
     if (hostname.includes("soundcloud.com")) return "soundcloud";
     if (hostname.includes("music.apple.com")) return "appleMusic";
   } catch {

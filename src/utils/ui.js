@@ -53,7 +53,7 @@ function createTrackMessage(track, state = "Playing", queue = null) {
 
   const extId = track.extractor?.identifier || "";
   const sourceType = sourceInfo?.source || null;
-  const isSpotify = sourceType === "spotify";
+  const isSpotify = sourceType === "spotify" || extId.includes("spotify");
   const isApple = sourceType === "appleMusic" || extId.includes("apple-music");
   const isSoundCloud =
     sourceType === "soundcloud" || extId.includes("soundcloud");
