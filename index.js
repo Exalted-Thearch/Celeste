@@ -36,7 +36,7 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
 
 (async () => {
   // YouTubei must be registered first
-  await player.extractors.register(YoutubeiExtractor, {
+  /* await player.extractors.register(YoutubeiExtractor, {
     streamOptions: {
       useClient: "TV",
     },
@@ -45,6 +45,36 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
         "C:\\Programming\\yt-dlp\\yt-dlp.exe"
       : "/usr/local/bin/yt-dlp",
     overrideBridgeMode: "yt-dlp",
+  });*/
+
+  const { execFile } = require("child_process");
+
+  const YTDLP_PATH =
+    process.platform === "win32" ?
+      "C:\\Programming\\yt-dlp\\yt-dlp.exe"
+    : "/usr/local/bin/yt-dlp";
+
+  await player.extractors.register(YoutubeiExtractor, {
+    streamOptions: {
+      useClient: "TV",
+    },
+    createStream: async (track) => {
+      return new Promise((resolve, reject) => {
+        const args = [
+          "--no-warnings",
+          "-f",
+          "bestaudio",
+          "-o",
+          "-",
+          "--quiet",
+          track.url,
+        ];
+
+        const proc = execFile(YTDLP_PATH, args, { encoding: "buffer" });
+        if (!proc.stdout) return reject(new Error("yt-dlp stdout is null"));
+        resolve(proc.stdout);
+      });
+    },
   });
 
   // Load specialized extractors
