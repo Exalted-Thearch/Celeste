@@ -30,13 +30,21 @@ const player = new Player(client, {
   skipFFmpeg: false,
 });
 
+const YtDlpWrap = require("yt-dlp-wrap").default;
+
+// Auto-download yt-dlp binary if not present
+
 (async () => {
   // YouTubei must be registered first
   await player.extractors.register(YoutubeiExtractor, {
     streamOptions: {
-      useClient: "WEB",
+      useClient: "TV",
     },
-    useYoutubeDL: true,
+    ytdlpPath:
+      process.platform === "win32" ?
+        "C:\\Programming\\yt-dlp\\yt-dlp.exe"
+      : "/usr/local/bin/yt-dlp",
+    overrideBridgeMode: "yt-dlp",
   });
 
   // Load specialized extractors
