@@ -48,32 +48,30 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
   });*/
 
   const { execFile } = require("child_process");
+  const { promisify } = require("util");
+  const execFileAsync = promisify(execFile);
 
   const YTDLP_PATH =
     process.platform === "win32" ?
       "C:\\Programming\\yt-dlp\\yt-dlp.exe"
     : "/usr/local/bin/yt-dlp";
 
+  const COOKIES_PATH =
+    process.platform === "win32" ? null : "/home/ubuntu/Celeste/cookies.txt";
+
   await player.extractors.register(YoutubeiExtractor, {
     streamOptions: {
       useClient: "TV",
     },
     createStream: async (track) => {
-      return new Promise((resolve, reject) => {
-        const args = [
-          "--no-warnings",
-          "-f",
-          "bestaudio",
-          "-o",
-          "-",
-          "--quiet",
-          track.url,
-        ];
+      const args = ["--no-warnings", "-f", "251/250/249/140", "--get-url"];
+      if (COOKIES_PATH) args.push("--cookies", COOKIES_PATH);
+      args.push(track.url);
 
-        const proc = execFile(YTDLP_PATH, args, { encoding: "buffer" });
-        if (!proc.stdout) return reject(new Error("yt-dlp stdout is null"));
-        resolve(proc.stdout);
-      });
+      const { stdout } = await execFileAsync(YTDLP_PATH, args);
+      const url = stdout.trim().split("\n")[0];
+      console.log("[yt-dlp] Got stream for:", track.title);
+      return url;
     },
   });
 
