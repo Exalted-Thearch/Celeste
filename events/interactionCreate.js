@@ -37,7 +37,7 @@ module.exports = {
     } catch (err) {
       console.error(`[Command Error] /${interaction.commandName}:`, err);
       const payload = {
-        content: `❌ Something went wrong: ${err.message}`,
+        content: `<:xbutton:1484155914780151910> Something went wrong: ${err.message}`,
         flags: MessageFlags.Ephemeral,
       };
       if (interaction.deferred || interaction.replied) {

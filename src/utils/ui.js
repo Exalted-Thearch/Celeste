@@ -23,20 +23,6 @@ const ICONS = {
 };
 
 /**
- * Creates a Components V2 music card.
- *
- * Layout (matching preview):
- *
- *  ┌─[accent bar]──────────────────────────────┐
- *  │  ▸ Now Playing              #2 (if queued) │
- *  │                                            │
- *  │  ### Track Title            [thumbnail]    │
- *  │  -# Artist Name                            │
- *  │                                            │
- *  │  -# 🟢 Spotify  ·  ⏱ 5:16  ·  👤 @user   │
- *  │  ──────────────────────────────────────    │
- *  │  `▬▬▬●──────── 2:01 / 5:16`               │
- *  └────────────────────────────────────────────┘
  *  [🔀] [⏹️] [⏸️ primary] [⏭️] [🔁]
  */
 function createTrackMessage(track, state = "Playing", queue = null) {
@@ -88,10 +74,10 @@ function createTrackMessage(track, state = "Playing", queue = null) {
   if (isQueued && queue) {
     stateLine = `<:vinylrecord:1483465811854229685> **Added to Queue** \`#${queue.tracks.size}\``;
   } else if (isPaused) {
-    stateLine = `⏸ **Paused**`;
+    stateLine = `<:pause1:1484157187633971281> **Paused**`;
   } else {
     stateLine = `<:musicalnote:1483465838026690662> **Now Playing**`;
-  }
+  } 
 
   // ── Main section: state / title / artist + thumbnail ─────────────────────────
   // -# prefix = Discord's small muted subtext in Components V2
@@ -110,10 +96,10 @@ function createTrackMessage(track, state = "Playing", queue = null) {
 
   // ── Meta line: source · duration · requested by ───────────────────────────────
   const metaParts = [`${sourceIcon} ${sourceName}`];
-  if (duration) metaParts.push(`⏱ ${duration}`);
+  if (duration) metaParts.push(`<:clock:1484156954283872416> ${duration}`);
   if (track.requestedBy)
     metaParts.push(
-      `👤 ${track.requestedBy.displayName || track.requestedBy.username || track.requestedBy}`,
+      `<:requestedBy:1484156602083967018> ${track.requestedBy.displayName || track.requestedBy.username || track.requestedBy}`,
     );
 
   // ── Progress bar (playing/paused only) ────────────────────────────────────────
@@ -194,14 +180,14 @@ async function handleButtonInteraction(interaction) {
 
   if (!queue || !queue.isPlaying()) {
     return interaction.reply({
-      content: "❌ Nothing is currently playing.",
+      content: "<:xbutton:1484155914780151910> Nothing is currently playing.",
       flags: MessageFlags.Ephemeral,
     });
   }
 
   if (interaction.member.voice.channelId !== queue.dispatcher?.channel?.id) {
     return interaction.reply({
-      content: "❌ You must be in the same voice channel to use these buttons.",
+      content: "<:xbutton:1484155914780151910> You must be in the same voice channel to use these buttons.",
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -223,25 +209,25 @@ async function handleButtonInteraction(interaction) {
       case "skip":
         queue.node.skip();
         await interaction.reply({
-          content: `✅ Skipped by ${interaction.user.displayName}`,
+          content: `<:skipbutton:1483467742504947824> Skipped by ${interaction.user.displayName}`,
         });
         break;
       case "stop":
         queue.delete();
         await interaction.reply({
-          content: `⏹️ Stopped by ${interaction.user.displayName}. Cleared queue.`,
+          content: `<:stop:1483467796418527353> Stopped by ${interaction.user.displayName}. Cleared queue.`,
         });
         break;
       case "shuffle":
         if (!queue.tracks.size) {
           return interaction.reply({
-            content: "❌ The queue is empty!",
+            content: "<:xbutton:1484155914780151910> The queue is empty!",
             flags: MessageFlags.Ephemeral,
           });
         }
         queue.tracks.shuffle();
         await interaction.reply({
-          content: `🔀 Shuffled **${queue.tracks.size}** tracks!`,
+          content: `<:shuffle:1483467751019380817> Shuffled **${queue.tracks.size}** tracks!`,
         });
         break;
       case "loop": {
@@ -260,7 +246,7 @@ async function handleButtonInteraction(interaction) {
         }
         queue.setRepeatMode(newMode);
         await interaction.reply({
-          content: `🔁 Loop mode set to **${modeName}**`,
+          content: `<:looparrow:1483467778886467605> Loop mode set to **${modeName}**`,
         });
         break;
       }

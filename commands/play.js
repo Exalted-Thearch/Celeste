@@ -94,7 +94,7 @@ module.exports = {
 
     if (!channel) {
       return interaction.reply({
-        content: "❌ You need to be in a voice channel!",
+        content: "<:xbutton:1484155914780151910> You need to be in a voice channel!",
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -264,7 +264,7 @@ module.exports = {
       }
 
       if (!res || !res.hasTracks()) {
-        return interaction.editReply({ content: "❌ No results found." });
+        return interaction.editReply({ content: "<:xbutton:1484155914780151910> No results found." });
       }
 
       let tracks = [...res.tracks];
@@ -309,7 +309,7 @@ module.exports = {
       } catch {
         player.nodes.delete(interaction.guildId);
         return interaction.editReply({
-          content: "❌ Could not join your voice channel!",
+          content: "<:xbutton:1484155914780151910> Could not join your voice channel!",
         });
       }
 
@@ -319,7 +319,7 @@ module.exports = {
       const { createTrackMessage } = require("../src/utils/ui");
       if (isPlaylist) {
         return interaction.editReply({
-          content: `✅ Added playlist **${res.playlist.title}** (${tracks.length} random tracks) to the queue.`,
+          content: `<:check:1484158667245879437> Added playlist **${res.playlist.title}** (${tracks.length} random tracks) to the queue.`,
         });
       } else {
         const ui = createTrackMessage(tracks[0], "Added to Queue", queue);
@@ -330,7 +330,7 @@ module.exports = {
     } catch (err) {
       console.error("[play]", err);
       return interaction.editReply({ content: `❌ ${err.message}` });
-    }
+    } 
   },
 };
 

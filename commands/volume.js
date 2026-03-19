@@ -17,7 +17,7 @@ module.exports = {
   async execute(client, interaction) {
     const queue = useQueue(interaction.guildId);
     if (!queue?.isPlaying()) {
-      return interaction.reply({ content: '❌ Nothing is playing right now!', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '<:xbutton:1484155914780151910> Nothing is playing right now!', flags: MessageFlags.Ephemeral });
     }
 
     const vol = interaction.options.getInteger('level');

@@ -31,7 +31,7 @@ module.exports = {
     const channel  = interaction.member?.voice?.channel;
 
     if (!channel) {
-      return interaction.reply({ content: '❌ You need to be in a voice channel!', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '<:xbutton:1484155914780151910> You need to be in a voice channel!', flags: MessageFlags.Ephemeral });
     }
 
     await interaction.deferReply();
@@ -80,7 +80,7 @@ module.exports = {
       }
 
       if (!results || !results.tracks.length) {
-        return interaction.editReply({ content: '❌ No results found!' });
+        return interaction.editReply({ content: '<:xbutton:1484155914780151910> No results found!' });
       }
 
       const tracks = results.tracks.slice(0, 5);
@@ -108,7 +108,7 @@ module.exports = {
 
       collector.on('collect', async (i) => {
         if (i.user.id !== interaction.user.id) {
-          return i.reply({ content: '❌ This is not your search!', flags: MessageFlags.Ephemeral });
+          return i.reply({ content: '<:xbutton:1484155914780151910> This is not your search!', flags: MessageFlags.Ephemeral });
         }
 
         await i.deferUpdate();
