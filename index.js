@@ -52,6 +52,8 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
     },
     createStream: async (track) => {
       const { useMainPlayer, QueryType } = require("discord-player");
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFile);
 
       let urlToStream = track.url;
 
@@ -64,24 +66,15 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
           });
           if (res?.hasTracks()) {
             urlToStream = res.tracks[0].url;
-            console.log(
-              `[yt-dlp] Bridge fallback for "${track.title}" → ${urlToStream}`,
-            );
           } else {
-            console.warn(
-              `[yt-dlp] Could not find YouTube fallback for "${track.title}", skipping.`,
-            );
             return null;
           }
         } catch (e) {
-          console.error(
-            `[yt-dlp] Fallback search error for "${track.title}":`,
-            e.message,
-          );
           return null;
         }
       }
 
+      // Get the CDN URL first
       const args = [
         "--no-warnings",
         "-f",
@@ -91,22 +84,46 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
       if (COOKIES_PATH) args.push("--cookies", COOKIES_PATH);
       args.push(urlToStream);
 
-      // --get-url resolves and exits quickly; run it async then validate.
-      const { promisify } = require("util");
-      const execFileAsync = promisify(execFile);
       let cdnUrl;
       try {
-        const { stdout, stderr } = await execFileAsync(YTDLP_PATH, args);
-        if (stderr?.trim()) console.error("[yt-dlp]", stderr.trim());
+        const { stdout } = await execFileAsync(YTDLP_PATH, args);
         cdnUrl = stdout.trim().split("\n")[0];
       } catch (e) {
-        console.error(`[yt-dlp] Failed to get URL for "${track.title}":`, e.message);
+        console.error(`[yt-dlp] Failed for "${track.title}":`, e.message);
         return null;
       }
 
-      if (!cdnUrl) {
-        console.warn(`[yt-dlp] Empty URL returned for "${track.title}", skipping.`);
-        return null;
+      if (!cdnUrl) return null;
+
+      // On AWS: pipe through ffmpeg for stable audio
+      // On Windows: return URL directly (no latency issues locally)
+      if (process.platform !== "win32") {
+        const { spawn } = require("child_process");
+        const ffmpeg = spawn(
+          "ffmpeg",
+          [
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "5",
+            "-i",
+            cdnUrl,
+            "-vn",
+            "-acodec",
+            "libopus",
+            "-b:a",
+            "128k",
+            "-f",
+            "opus",
+            "pipe:1",
+          ],
+          { stdio: ["ignore", "pipe", "ignore"] },
+        );
+
+        console.log("[ffmpeg] Piping stream for:", track.title);
+        return ffmpeg.stdout;
       }
 
       console.log("[yt-dlp] Got stream URL for:", track.title);
@@ -254,7 +271,8 @@ player.events.on("emptyQueue", async (queue) => {
     return common / Math.min(ta.size, tb.size);
   };
 
-  const seedMeta = seedTrack.sourceInfo || seedTrack.metadata?.sourceInfo || null;
+  const seedMeta =
+    seedTrack.sourceInfo || seedTrack.metadata?.sourceInfo || null;
   const seedTitle = seedMeta?.title || seedTrack.title;
   const seedAuthor = seedMeta?.author || seedTrack.author;
 
@@ -278,7 +296,8 @@ player.events.on("emptyQueue", async (queue) => {
     try {
       const parsed = new URL(url);
       if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1);
-      if (parsed.hostname.includes("youtube.com")) return parsed.searchParams.get("v");
+      if (parsed.hostname.includes("youtube.com"))
+        return parsed.searchParams.get("v");
     } catch {
       return null;
     }
@@ -288,23 +307,31 @@ player.events.on("emptyQueue", async (queue) => {
   const videoId = extractYouTubeVideoId(seedTrack.url);
 
   const recommendationSources = [
-    ...(videoId
-      ? [
-          {
-            query: `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`,
-            isUrl: true,
-            label: "yt-radio",
-          },
-          {
-            query: `https://www.youtube.com/watch?v=${videoId}&list=RDMM`,
-            isUrl: true,
-            label: "yt-mix",
-          },
-        ]
-      : []),
-    { query: `${seedAuthor} popular songs`,      isUrl: false, label: "artist-popular" },
-    { query: `songs similar to ${seedTitle}`,   isUrl: false, label: "seed-similar"   },
-    { query: `${seedAuthor} mix`,               isUrl: false, label: "artist-mix"     },
+    ...(videoId ?
+      [
+        {
+          query: `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`,
+          isUrl: true,
+          label: "yt-radio",
+        },
+        {
+          query: `https://www.youtube.com/watch?v=${videoId}&list=RDMM`,
+          isUrl: true,
+          label: "yt-mix",
+        },
+      ]
+    : []),
+    {
+      query: `${seedAuthor} popular songs`,
+      isUrl: false,
+      label: "artist-popular",
+    },
+    {
+      query: `songs similar to ${seedTitle}`,
+      isUrl: false,
+      label: "seed-similar",
+    },
+    { query: `${seedAuthor} mix`, isUrl: false, label: "artist-mix" },
   ];
 
   try {
