@@ -114,13 +114,18 @@ module.exports = {
       if (isUrl) {
         const sourceType = detectUrlSource(query);
 
+        // Playlist/album/set URLs for any platform should be passed directly to
+        // the extractor so the full collection is resolved — no single-track override.
+        const isCollectionUrl = detectIsCollectionUrl(query, sourceType);
+
         // SoundCloud previews and Apple Music DRM links are unreliable for
         // direct streaming, so we resolve metadata and then play equivalent
         // YouTube audio while preserving original source info in the card.
         if (
-          sourceType === "soundcloud" ||
-          sourceType === "appleMusic" ||
-          sourceType === "spotify"
+          !isCollectionUrl &&
+          (sourceType === "soundcloud" ||
+            sourceType === "appleMusic" ||
+            sourceType === "spotify")
         ) {
           let seedTrack = null;
 
@@ -186,6 +191,8 @@ module.exports = {
             res = await player.search(query, { requestedBy: interaction.user });
           }
         } else {
+          // Playlist/album URLs (YouTube, Spotify playlist/album, etc.) — let
+          // the extractor resolve the full collection.
           res = await player.search(query, { requestedBy: interaction.user });
         }
         // ── 2. Autocomplete-selected Spotify result ──────────────────────────────
@@ -269,15 +276,19 @@ module.exports = {
 
       let tracks = [...res.tracks];
       const isPlaylist = res.hasPlaylist();
+      // Also treat any direct URL that returned multiple tracks as a collection
+      // (covers extractors that don't set hasPlaylist, e.g. Spotify/Apple Music).
+      const isMultiTrackUrl = isUrl && !forceSingleTrack && tracks.length > 1;
 
-      if (isPlaylist) {
+      if (isPlaylist || isMultiTrackUrl) {
+        // Shuffle and cap at 100 random tracks for all playlist-like results.
         for (let i = tracks.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
         }
         if (tracks.length > 100) tracks = tracks.slice(0, 100);
       }
-      if (!isPlaylist && tracks.length > 1 && (!isUrl || forceSingleTrack)) {
+      if (!isPlaylist && !isMultiTrackUrl && tracks.length > 1 && (!isUrl || forceSingleTrack)) {
         const bestTrack = pickBestCandidateTrack(tracks, sourceMeta);
         tracks = [bestTrack || tracks[0]];
       }
@@ -317,9 +328,10 @@ module.exports = {
       if (!queue.isPlaying()) await queue.node.play();
 
       const { createTrackMessage } = require("../src/utils/ui");
-      if (isPlaylist) {
+      if (isPlaylist || isMultiTrackUrl) {
+        const playlistTitle = res.playlist?.title ?? "Playlist";
         return interaction.editReply({
-          content: `<:check:1484158667245879437> Added playlist **${res.playlist.title}** (${tracks.length} random tracks) to the queue.`,
+          content: `<:check:1484158667245879437> Added ${tracks.length} random tracks from **${playlistTitle}** to the queue.`,
         });
       } else {
         const ui = createTrackMessage(tracks[0], "Added to Queue", queue);
@@ -445,6 +457,29 @@ function extractSpotifyId(url) {
     return null;
   }
   return null;
+}
+
+/**
+ * Returns true when the URL points to a playlist, album, or set that a
+ * registered extractor can actually resolve as a full collection.
+ * Apple Music is intentionally excluded — no public playlist extraction API
+ * is available, so those URLs fall through to the single-track path instead.
+ */
+function detectIsCollectionUrl(url, sourceType) {
+  try {
+    const { pathname } = new URL(url);
+    if (sourceType === "spotify") {
+      // /playlist/ID, /album/ID, /artist/ID
+      return /\/(playlist|album|artist)\//i.test(pathname);
+    }
+    if (sourceType === "soundcloud") {
+      // Sets: soundcloud.com/user/sets/playlist-name
+      return /\/sets\//i.test(pathname);
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 async function resolveAppleMusicMetadata(value) {

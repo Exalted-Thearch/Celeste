@@ -192,6 +192,21 @@ async function handleButtonInteraction(interaction) {
     });
   }
 
+  // ── Queue pagination buttons ──────────────────────────────────────────────
+  if (interaction.customId.startsWith('btn_queue_nav:')) {
+    const targetPage = parseInt(interaction.customId.split(':')[1], 10);
+    const { useQueue } = require('discord-player');
+    const q = useQueue(interaction.guildId);
+    if (!q?.isPlaying()) {
+      return interaction.reply({
+        content: '<:xbutton:1484155914780151910> Nothing is playing right now.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    const { buildQueueReply } = require('../../commands/queue');
+    return interaction.update(buildQueueReply(q, targetPage));
+  }
+
   try {
     switch (interaction.customId) {
       case "pause_resume": {

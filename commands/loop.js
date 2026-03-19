@@ -1,12 +1,10 @@
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { useQueue, QueueRepeatMode } = require('discord-player');
-const config = require('../config');
 
 const MODES = {
-  off:      { value: QueueRepeatMode.OFF,      label: 'Off',      emoji: '➡️'  },
-  track:    { value: QueueRepeatMode.TRACK,    label: 'Track',    emoji: '🔂'  },
-  queue:    { value: QueueRepeatMode.QUEUE,    label: 'Queue',    emoji: '🔁'  },
-  autoplay: { value: QueueRepeatMode.AUTOPLAY, label: 'Autoplay', emoji: '♾️'  },
+  off:   { value: QueueRepeatMode.OFF,   label: 'Off',   emoji: '➡️' },
+  track: { value: QueueRepeatMode.TRACK, label: 'Track', emoji: '🔂' },
+  queue: { value: QueueRepeatMode.QUEUE, label: 'Queue', emoji: '🔁' },
 };
 
 module.exports = {
@@ -18,17 +16,19 @@ module.exports = {
         .setDescription('Loop mode')
         .setRequired(true)
         .addChoices(
-          { name: '➡️  Off',      value: 'off'      },
-          { name: '🔂  Track',    value: 'track'    },
-          { name: '🔁  Queue',    value: 'queue'    },
-          { name: '♾️  Autoplay', value: 'autoplay' },
+          { name: '➡️  Off',   value: 'off'   },
+          { name: '🔂  Track', value: 'track' },
+          { name: '🔁  Queue', value: 'queue' },
         ),
     ),
 
   async execute(client, interaction) {
     const queue = useQueue(interaction.guildId);
     if (!queue) {
-      return interaction.reply({ content: '❌<:xbutton:1484155914780151910> Nothing is playing right now!', flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        content: '<:xbutton:1484155914780151910> Nothing is playing right now!',
+        flags: MessageFlags.Ephemeral,
+      });
     }
 
     const key  = interaction.options.getString('mode');

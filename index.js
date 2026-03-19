@@ -39,9 +39,9 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
   const { execFile } = require("child_process");
 
   const YTDLP_PATH =
-    process.platform === "win32"
-      ? "C:\\Programming\\yt-dlp\\yt-dlp.exe"
-      : "/usr/local/bin/yt-dlp";
+    process.platform === "win32" ?
+      "C:\\Programming\\yt-dlp\\yt-dlp.exe"
+    : "/usr/local/bin/yt-dlp";
 
   const COOKIES_PATH =
     process.platform === "win32" ? null : "/home/ubuntu/Celeste/cookies.txt";
@@ -51,19 +51,68 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
       useClient: "TV",
     },
     createStream: async (track) => {
+      const { useMainPlayer, QueryType } = require("discord-player");
+
+      let urlToStream = track.url;
+
+      if (!/youtube\.com|youtu\.be/i.test(urlToStream)) {
+        try {
+          const p = useMainPlayer();
+          const query = `${track.title} ${track.author}`.trim();
+          const res = await p.search(query, {
+            searchEngine: QueryType.YOUTUBE_SEARCH,
+          });
+          if (res?.hasTracks()) {
+            urlToStream = res.tracks[0].url;
+            console.log(
+              `[yt-dlp] Bridge fallback for "${track.title}" → ${urlToStream}`,
+            );
+          } else {
+            console.warn(
+              `[yt-dlp] Could not find YouTube fallback for "${track.title}", skipping.`,
+            );
+            return null;
+          }
+        } catch (e) {
+          console.error(
+            `[yt-dlp] Fallback search error for "${track.title}":`,
+            e.message,
+          );
+          return null;
+        }
+      }
+
       const args = [
         "--no-warnings",
-        "-f", "bestaudio[acodec=opus]/bestaudio[acodec=mp4a]/bestaudio/best",
-        "-o", "-",
+        "-f",
+        "bestaudio[acodec=opus]/bestaudio[acodec=mp4a]/bestaudio/best",
+        "--get-url",
       ];
       if (COOKIES_PATH) args.push("--cookies", COOKIES_PATH);
-      args.push(track.url);
+      args.push(urlToStream);
 
-      const proc = execFile(YTDLP_PATH, args);
-      console.log("[yt-dlp] Piping stream for:", track.title);
-      return proc.stdout;
-    },                  // ← closing createStream
-  });                   // ← closing register
+      // --get-url resolves and exits quickly; run it async then validate.
+      const { promisify } = require("util");
+      const execFileAsync = promisify(execFile);
+      let cdnUrl;
+      try {
+        const { stdout, stderr } = await execFileAsync(YTDLP_PATH, args);
+        if (stderr?.trim()) console.error("[yt-dlp]", stderr.trim());
+        cdnUrl = stdout.trim().split("\n")[0];
+      } catch (e) {
+        console.error(`[yt-dlp] Failed to get URL for "${track.title}":`, e.message);
+        return null;
+      }
+
+      if (!cdnUrl) {
+        console.warn(`[yt-dlp] Empty URL returned for "${track.title}", skipping.`);
+        return null;
+      }
+
+      console.log("[yt-dlp] Got stream URL for:", track.title);
+      return cdnUrl;
+    }, // ← closing createStream
+  }); // ← closing register
 
   // Load specialized extractors
   try {
@@ -81,7 +130,10 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
     await player.extractors.register(SoundCloudExtractor, {});
     console.log("✅ SoundCloudExtractor registered");
   } catch (err) {
-    console.error("❌ Failed to register Spotify/SoundCloud extractor:", err.message);
+    console.error(
+      "❌ Failed to register Spotify/SoundCloud extractor:",
+      err.message,
+    );
   }
 
   // Load remaining extractors (skip already registered ones)
@@ -101,31 +153,51 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
 const { createTrackMessage } = require("./src/utils/ui");
 
 // ─── Player Events ────────────────────────────────────────────────────────────
-player.events.on("playerStart", (queue, track) => {
+player.events.on("playerStart", async (queue, track) => {
   console.log(
     `[Player] Started playing: ${track.title} in ${queue.guild.name}`,
   );
   if (queue.metadata) queue.metadata.lastTrack = track;
+
+  // Spotify playlist tracks often come back with the generic CDN thumbnail
+  // instead of real album art. Use title+author search to get the real artwork,
+  // since the internal track URL ID doesn't work with the Spotify API directly.
+  const isSpotifyTrack = track.extractor?.identifier
+    ?.toLowerCase()
+    .includes("spotify");
+  const hasGenericThumb =
+    !track.thumbnail || /scdn\.co\/i\/_global/i.test(track.thumbnail);
+  if (isSpotifyTrack && hasGenericThumb) {
+    try {
+      const { searchSpotify } = require("./src/utils/spotify");
+      const results = await searchSpotify(
+        `${track.title} ${track.author}`.trim(),
+        1,
+      );
+      const artUrl = results[0]?.album?.images?.[0]?.url;
+      if (artUrl) track.thumbnail = artUrl;
+    } catch {
+      /* non-critical — proceed with whatever thumbnail we have */
+    }
+  }
+
   const ui = createTrackMessage(track);
   queue.metadata?.channel?.send({ ...ui });
 });
 
 player.events.on("emptyQueue", async (queue) => {
   console.log(
-    `[Player] Queue finished in ${queue.guild.name}. RepeatMode: ${queue.repeatMode}`,
+    `[Player] Queue finished in ${queue.guild.name}. Recommend: ${queue.metadata?.recommendEnabled}`,
   );
 
-  // If autoplay is off, notify. If on, attempt a manual fallback recommendation.
-  if (queue.repeatMode !== QueueRepeatMode.AUTOPLAY) {
+  if (!queue.metadata?.recommendEnabled) {
     queue.metadata?.channel?.send(
       "✅ Queue finished! Add more songs with `/play`.",
     );
     return;
   }
 
-  console.log(
-    "[Player] Autoplay is enabled, attempting fallback recommendation...",
-  );
+  console.log("[Radio] Finding recommendation...");
 
   const seedTrack =
     queue.history?.currentTrack ||
@@ -133,113 +205,106 @@ player.events.on("emptyQueue", async (queue) => {
     queue.history?.tracks?.toArray?.()?.at?.(-1);
 
   if (!seedTrack) {
-    console.log("[Player] Autoplay fallback skipped: no seed track available.");
+    console.log("[Radio] Skipped: no seed track available.");
     return;
   }
 
-  const recentPlayed = queue.history?.tracks?.toArray?.()?.slice(-15) || [];
-  const seedMeta =
-    seedTrack.sourceInfo || seedTrack.metadata?.sourceInfo || null;
-  const seedTitle = seedMeta?.title || seedTrack.title;
-  const seedAuthor = seedMeta?.author || seedTrack.author;
+  // ── Build duplicate-detection sets from the FULL history ─────────────────
+  const historyTracks = queue.history?.tracks?.toArray?.() || [];
+
+  const playedUrls = new Set([
+    seedTrack.url,
+    ...historyTracks.map((t) => t.url),
+  ]);
 
   const normalizeTitle = (title = "") =>
     title
       .toLowerCase()
       .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
       .replace(
-        /\b(official|video|audio|lyrics?|topic|hq|hd|remaster(?:ed)?|version|sped\s*up|slowed|reverb)\b/g,
+        /\b(official|video|audio|lyrics?|topic|hq|hd|remaster(?:ed)?|version|sped\s*up|slowed|reverb|ft\.?|feat\.?)\b/g,
         " ",
       )
       .replace(/[^a-z0-9\s]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
-  const tokenize = (title = "") => {
-    const clean = normalizeTitle(title);
-    return new Set(clean.split(" ").filter(Boolean));
+  // Fingerprint: clean title + 30-second duration bucket
+  // Two uploads of the same song will usually share this fingerprint.
+  const fingerprint = (t) => {
+    const title = normalizeTitle(t.title || "");
+    const secs = Math.floor(Number(t.durationMS || 0) / 1000);
+    return `${title}|${Math.floor(secs / 30)}`;
   };
 
-  const tokenOverlap = (aTitle, bTitle) => {
-    const a = tokenize(aTitle);
-    const b = tokenize(bTitle);
-    if (!a.size || !b.size) return 0;
+  const playedFingerprints = new Set([
+    fingerprint(seedTrack),
+    ...historyTracks.map(fingerprint),
+  ]);
 
+  const tokenize = (title = "") =>
+    new Set(normalizeTitle(title).split(" ").filter(Boolean));
+
+  const tokenOverlap = (a, b) => {
+    const ta = tokenize(a);
+    const tb = tokenize(b);
+    if (!ta.size || !tb.size) return 0;
     let common = 0;
-    for (const token of a) {
-      if (b.has(token)) common += 1;
-    }
+    for (const tok of ta) if (tb.has(tok)) common++;
+    return common / Math.min(ta.size, tb.size);
+  };
 
-    return common / Math.min(a.size, b.size);
+  const seedMeta = seedTrack.sourceInfo || seedTrack.metadata?.sourceInfo || null;
+  const seedTitle = seedMeta?.title || seedTrack.title;
+  const seedAuthor = seedMeta?.author || seedTrack.author;
+
+  const isNearDuplicate = (candidate) => {
+    if (!candidate) return true;
+    // Exact URL already played
+    if (playedUrls.has(candidate.url)) return true;
+    // Fingerprint match — same song, different channel/upload
+    if (playedFingerprints.has(fingerprint(candidate))) return true;
+    // Heavy title overlap + similar duration (same song, different name)
+    const seedDuration = Number(seedTrack.durationMS || 0);
+    const candDuration = Number(candidate.durationMS || 0);
+    const closeDuration =
+      seedDuration > 0 &&
+      candDuration > 0 &&
+      Math.abs(seedDuration - candDuration) <= 8000;
+    return tokenOverlap(candidate.title, seedTitle) >= 0.75 && closeDuration;
   };
 
   const extractYouTubeVideoId = (url = "") => {
     try {
       const parsed = new URL(url);
-      if (parsed.hostname.includes("youtu.be")) {
-        return parsed.pathname.slice(1);
-      }
-      if (parsed.hostname.includes("youtube.com")) {
-        return parsed.searchParams.get("v");
-      }
+      if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1);
+      if (parsed.hostname.includes("youtube.com")) return parsed.searchParams.get("v");
     } catch {
       return null;
     }
     return null;
   };
 
-  const isNearDuplicate = (candidate) => {
-    if (!candidate || candidate.url === seedTrack.url) return true;
-
-    const sameTitle =
-      normalizeTitle(candidate.title) === normalizeTitle(seedTitle);
-    const heavyTitleOverlap = tokenOverlap(candidate.title, seedTitle) >= 0.8;
-
-    const seedDuration = Number(seedTrack.durationMS || 0);
-    const candidateDuration = Number(candidate.durationMS || 0);
-    const closeDuration =
-      seedDuration > 0 &&
-      candidateDuration > 0 &&
-      Math.abs(seedDuration - candidateDuration) <= 12000;
-
-    const alreadyPlayed = recentPlayed.some(
-      (played) => played.url === candidate.url,
-    );
-
-    // Reject same name family (covers/reuploads/lyrics edits of the same song)
-    const sameSongFamily = heavyTitleOverlap && closeDuration;
-
-    return alreadyPlayed || sameTitle || sameSongFamily;
-  };
-
   const videoId = extractYouTubeVideoId(seedTrack.url);
 
   const recommendationSources = [
-    ...(videoId ?
-      [
-        {
-          query: `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`,
-          isUrl: true,
-          label: "yt-radio",
-        },
-        {
-          query: `https://www.youtube.com/watch?v=${videoId}&list=RDMM`,
-          isUrl: true,
-          label: "yt-mix",
-        },
-      ]
-    : []),
-    {
-      query: `${seedTitle} ${seedAuthor}`,
-      isUrl: false,
-      label: "search-seed",
-    },
-    { query: `${seedAuthor} mix`, isUrl: false, label: "search-mix" },
-    {
-      query: `${seedAuthor} similar songs`,
-      isUrl: false,
-      label: "search-similar",
-    },
+    ...(videoId
+      ? [
+          {
+            query: `https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`,
+            isUrl: true,
+            label: "yt-radio",
+          },
+          {
+            query: `https://www.youtube.com/watch?v=${videoId}&list=RDMM`,
+            isUrl: true,
+            label: "yt-mix",
+          },
+        ]
+      : []),
+    { query: `${seedAuthor} popular songs`,      isUrl: false, label: "artist-popular" },
+    { query: `songs similar to ${seedTitle}`,   isUrl: false, label: "seed-similar"   },
+    { query: `${seedAuthor} mix`,               isUrl: false, label: "artist-mix"     },
   ];
 
   try {
@@ -253,37 +318,48 @@ player.events.on("emptyQueue", async (queue) => {
 
       if (!result?.hasTracks()) continue;
 
-      nextTrack = result.tracks.find((track) => !isNearDuplicate(track));
+      const candidates = result.tracks.filter((t) => !isNearDuplicate(t));
+      if (!candidates.length) continue;
 
-      if (nextTrack) {
-        console.log(`[Player] Autoplay fallback source: ${source.label}`);
-        break;
+      // For URL-based radio mixes, pick randomly from the first 8 non-duplicates
+      // so the same continuation song isn't always picked.
+      if (source.isUrl) {
+        const pool = candidates.slice(0, 8);
+        nextTrack = pool[Math.floor(Math.random() * pool.length)];
+      } else {
+        nextTrack = candidates[0];
       }
+
+      console.log(`[Radio] Source: ${source.label} → "${nextTrack.title}"`);
+      break;
     }
 
     if (!nextTrack) {
-      console.log(
-        "[Player] Autoplay fallback could not find a non-duplicate recommendation.",
+      console.log("[Radio] Could not find a non-duplicate recommendation.");
+      queue.metadata?.channel?.send(
+        "🎵 Couldn't find a fresh recommendation — add more songs with `/play`!",
       );
       return;
     }
 
     queue.addTrack(nextTrack);
     if (!queue.isPlaying()) await queue.node.play();
-
-    console.log(`[Player] Autoplay fallback queued: ${nextTrack.title}`);
   } catch (error) {
-    console.error("[Player] Autoplay fallback failed:", error.message);
+    console.error("[Radio] Recommendation failed:", error.message);
   }
 });
 
 player.events.on("error", (queue, error) => {
   console.error("[Player Error]", error);
 
-  // Ignore known UDP socket discovery errors from spamming the channel
+  // Ignore transient/benign errors that don't affect playback
   if (
     error.message.includes("Cannot perform IP discovery") ||
-    error.message.includes("socket closed")
+    error.message.includes("socket closed") ||
+    error.code === "EPIPE" ||
+    error.message.includes("write EPIPE") ||
+    error.code === "ECONNRESET" ||
+    error.message.includes("ECONNRESET")
   ) {
     return;
   }
