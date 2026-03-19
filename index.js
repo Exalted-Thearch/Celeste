@@ -28,6 +28,7 @@ const player = new Player(client, {
     dlChunkSize: 0,
   },
   skipFFmpeg: false,
+  bufferingTimeout: 3000,
 });
 
 const YtDlpWrap = require("yt-dlp-wrap").default;
@@ -35,26 +36,12 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
 // Auto-download yt-dlp binary if not present
 
 (async () => {
-  // YouTubei must be registered first
-  /* await player.extractors.register(YoutubeiExtractor, {
-    streamOptions: {
-      useClient: "TV",
-    },
-    ytdlpPath:
-      process.platform === "win32" ?
-        "C:\\Programming\\yt-dlp\\yt-dlp.exe"
-      : "/usr/local/bin/yt-dlp",
-    overrideBridgeMode: "yt-dlp",
-  });*/
-
   const { execFile } = require("child_process");
-  const { promisify } = require("util");
-  const execFileAsync = promisify(execFile);
 
   const YTDLP_PATH =
-    process.platform === "win32" ?
-      "C:\\Programming\\yt-dlp\\yt-dlp.exe"
-    : "/usr/local/bin/yt-dlp";
+    process.platform === "win32"
+      ? "C:\\Programming\\yt-dlp\\yt-dlp.exe"
+      : "/usr/local/bin/yt-dlp";
 
   const COOKIES_PATH =
     process.platform === "win32" ? null : "/home/ubuntu/Celeste/cookies.txt";
@@ -64,16 +51,19 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
       useClient: "TV",
     },
     createStream: async (track) => {
-      const args = ["--no-warnings", "-f", "251/250/249/140", "--get-url"];
+      const args = [
+        "--no-warnings",
+        "-f", "bestaudio[acodec=opus]/bestaudio[acodec=mp4a]/bestaudio/best",
+        "-o", "-",
+      ];
       if (COOKIES_PATH) args.push("--cookies", COOKIES_PATH);
       args.push(track.url);
 
-      const { stdout } = await execFileAsync(YTDLP_PATH, args);
-      const url = stdout.trim().split("\n")[0];
-      console.log("[yt-dlp] Got stream for:", track.title);
-      return url;
-    },
-  });
+      const proc = execFile(YTDLP_PATH, args);
+      console.log("[yt-dlp] Piping stream for:", track.title);
+      return proc.stdout;
+    },                  // ← closing createStream
+  });                   // ← closing register
 
   // Load specialized extractors
   try {
@@ -91,10 +81,7 @@ const YtDlpWrap = require("yt-dlp-wrap").default;
     await player.extractors.register(SoundCloudExtractor, {});
     console.log("✅ SoundCloudExtractor registered");
   } catch (err) {
-    console.error(
-      "❌ Failed to register Spotify/SoundCloud extractor:",
-      err.message,
-    );
+    console.error("❌ Failed to register Spotify/SoundCloud extractor:", err.message);
   }
 
   // Load remaining extractors (skip already registered ones)
